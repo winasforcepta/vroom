@@ -9,6 +9,8 @@ mod nvme;
 mod pci;
 #[allow(dead_code)]
 mod queues;
+#[allow(unused)]
+pub mod rdma;
 
 pub use memory::HUGE_PAGE_SIZE;
 pub use nvme::{NvmeDevice, NvmeQueuePair};
