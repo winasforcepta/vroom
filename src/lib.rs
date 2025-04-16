@@ -12,6 +12,8 @@ mod queues;
 #[allow(unused)]
 pub mod rdma;
 
+pub mod sgl;
+
 pub use memory::HUGE_PAGE_SIZE;
 pub use nvme::{NvmeDevice, NvmeQueuePair};
 use pci::*;

@@ -1,11 +1,12 @@
 use crate::cmd::NvmeCommand;
-use crate::memory::{Dma, DmaSlice};
+use crate::memory::{Dma, DmaBufferLike, DmaSlice};
 use crate::pci::pci_map_resource;
 use crate::queues::*;
 use crate::{NvmeNamespace, NvmeStats, HUGE_PAGE_SIZE};
 use std::collections::HashMap;
 use std::error::Error;
 use std::hint::spin_loop;
+use crate::sgl::SglChain;
 
 // clippy doesnt like this
 #[allow(unused, clippy::upper_case_acronyms)]
@@ -148,6 +149,62 @@ impl NvmeQueuePair {
         }
         reqs
     }
+
+    pub fn submit_io_sgl(
+        &mut self,
+        data: &impl DmaSlice,
+        mut lba: u64,
+        write: bool,
+        data_block_only: bool,
+    ) -> usize {
+        let mut reqs = 0;
+        let mut sgl = SglChain::preallocate(8, data_block_only)
+            .expect("Failed to preallocate SGL");
+
+        for chunk in data.chunks(2 * 4096) {
+            let blocks = (chunk.slice.len() as u64 + 512 - 1) / 512;
+
+            let (sgl_addr, sgl_len) = sgl.fill_from(
+                chunk.phys_addr as u64,
+                chunk.slice.len(),
+                4096,
+            ).expect("Failed to build SGL");
+
+            let entry = if write {
+                NvmeCommand::io_write_sgl(
+                    self.id << 11 | self.sub_queue.tail as u16,
+                    1,
+                    lba,
+                    blocks as u16 - 1,
+                    sgl_addr,
+                    sgl_len,
+                )
+            } else {
+                NvmeCommand::io_read_sgl(
+                    self.id << 11 | self.sub_queue.tail as u16,
+                    1,
+                    lba,
+                    blocks as u16 - 1,
+                    sgl_addr,
+                    sgl_len,
+                )
+            };
+
+            if let Some(tail) = self.sub_queue.submit_checked(entry) {
+                unsafe {
+                    std::ptr::write_volatile(self.sub_queue.doorbell as *mut u32, tail as u32);
+                }
+            } else {
+                eprintln!("queue full");
+                return reqs;
+            }
+
+            lba += blocks;
+            reqs += 1;
+        }
+        reqs
+    }
+
 
     // TODO: maybe return result
     pub fn complete_io(&mut self, n: usize) -> Option<u16> {
@@ -475,6 +532,60 @@ impl NvmeDevice {
         Ok(())
     }
 
+    pub fn write_sgl(
+        &mut self,
+        data: &impl DmaSlice,
+        lba: u64,
+        data_block_only: bool
+    ) -> Result<(), Box<dyn Error>> {
+        println!("[write_sgl] Called with LBA = {}, data_block_only = {}", lba, data_block_only);
+        let ns = self.namespaces.get(&1).ok_or("Namespace not found")?;
+        let mut sgl = SglChain::preallocate(8, data_block_only)?;
+        let block_size = ns.block_size.clone();
+
+        for chunk in data.chunks(128 * 4096) {
+            let blocks = (chunk.slice.len() as u64 + block_size - 1) / block_size;
+            println!("[write_sgl] Chunk: addr = {:#x}, size = {}, blocks = {}", chunk.phys_addr, chunk.slice.len(), blocks);
+            let (sgl_addr, sgl_len) = sgl.fill_from(
+                chunk.phys_addr as u64,
+                chunk.slice.len(),
+                4096,
+            )?;
+            println!("[write_sgl] SGL address: {:#x}, length: {}", sgl_addr, sgl_len);
+
+            self.namespace_io_sgl(1, blocks, lba, sgl_addr, chunk.slice.len() as u32, true)?;
+        }
+        Ok(())
+    }
+
+
+    pub fn read_sgl(
+        &mut self,
+        dest: &impl DmaSlice,
+        lba: u64,
+        data_block_only: bool
+    ) -> Result<(), Box<dyn Error>> {
+        println!("[write_sgl] Called with LBA = {}, data_block_only = {}", lba, data_block_only);
+        let ns = self.namespaces.get(&1).ok_or("Namespace not found")?;
+        let mut sgl = SglChain::preallocate(8, data_block_only)?;
+        let block_size = ns.block_size.clone();
+
+        for chunk in dest.chunks(128 * 4096) {
+            let blocks = (chunk.slice.len() as u64 + block_size - 1) / block_size;
+            println!("[read_sgl] Chunk: addr = {:#x}, size = {}, blocks = {}", chunk.phys_addr, chunk.slice.len(), blocks);
+            let (sgl_addr, sgl_len) = sgl.fill_from(
+                chunk.phys_addr as u64,
+                chunk.slice.len(),
+                4096,
+            )?;
+            println!("[read_sgl] SGL address: {:#x}, length: {}", sgl_addr, sgl_len);
+
+            self.namespace_io_sgl(1, blocks, lba, sgl_addr, chunk.slice.len() as u32, false)?;
+        }
+        Ok(())
+    }
+
+
     pub fn read(&mut self, dest: &impl DmaSlice, mut lba: u64) -> Result<(), Box<dyn Error>> {
         // let ns = *self.namespaces.get(&1).unwrap();
         for chunk in dest.chunks(2 * 4096) {
@@ -708,6 +819,62 @@ impl NvmeDevice {
         self.io_sq.head = self.complete_io(1).unwrap() as usize;
         Ok(())
     }
+
+    #[inline(always)]
+    fn namespace_io_sgl(
+        &mut self,
+        ns_id: u32,
+        blocks: u64,
+        lba: u64,
+        sgl_addr: u64,
+        sgl_len: u32,
+        write: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        println!(
+            "[namespace_io_sgl] ns_id = {}, blocks = {}, lba = {}, sgl_addr = {:#x}, sgl_len = {}, write = {}",
+            ns_id, blocks, lba, sgl_addr, sgl_len, write
+        );
+
+        let q_id = 1;
+        let cmd = if write {
+            println!("[namespace_io_sgl] Constructing WRITE SGL command");
+            NvmeCommand::io_write_sgl(
+                self.io_sq.tail as u16,
+                ns_id,
+                lba,
+                (blocks - 1) as u16,
+                sgl_addr,
+                sgl_len,
+            )
+        } else {
+            println!("[namespace_io_sgl] Constructing READ SGL command");
+            NvmeCommand::io_read_sgl(
+                self.io_sq.tail as u16,
+                ns_id,
+                lba,
+                (blocks - 1) as u16,
+                sgl_addr,
+                sgl_len,
+            )
+        };
+
+        let tail = self.io_sq.submit(cmd);
+        self.write_reg_idx(NvmeArrayRegs::SQyTDBL, q_id, tail as u32);
+
+        match self.complete_io(1) {
+            Some(status) => {
+                println!("[namespace_io_sgl] Completed successfully, new head: {}", status);
+                self.io_sq.head = status as usize;
+                Ok(())
+            },
+            None => {
+                println!("[namespace_io_sgl] Command failed!");
+                Err("Command failed".into())
+            },
+        }
+    }
+
+
 
     fn submit_and_complete_admin<F: FnOnce(u16, usize) -> NvmeCommand>(
         &mut self,

@@ -1,5 +1,5 @@
 pub mod rdma_target {
-    use crate::rdma::buffer_manager::BufferManager;
+    use crate::rdma::buffer_manager::{BufferManager, RdmaBufferAdapter};
     use crate::rdma::capsule::capsule::RequestCapsuleContext;
     use crate::rdma::rdma_common::rdma_binding::ibv_wc;
     use crate::rdma::rdma_common::rdma_common::{
@@ -15,6 +15,7 @@ pub mod rdma_target {
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::{io, mem, ptr, slice, thread};
+    use crate::memory::Dma;
 
     struct TargetRdmaContext {
         name: String,
@@ -478,7 +479,7 @@ pub mod rdma_target {
                     rwm.post_rmt_work(
                         wr_id,
                         qp,
-                        local_buffer.get(),
+                        local_buffer.as_ptr(),
                         lkey,
                         data_addr,
                         data_rkey,
@@ -498,7 +499,7 @@ pub mod rdma_target {
                     ctx.set_memory_block(wr_id as usize, &mut local_buffer);
 
                     unsafe {
-                        let local_buffer = local_buffer.get();
+                        let local_buffer = local_buffer.as_ptr();
                         let pattern = b"dcba";
                         let slice = std::slice::from_raw_parts_mut(local_buffer, 512);
                         for i in 0..512 {
@@ -527,7 +528,7 @@ pub mod rdma_target {
                     rwm.post_rmt_work(
                         wr_id,
                         qp,
-                        local_buffer.get(),
+                        local_buffer.as_ptr(),
                         lkey,
                         data_addr,
                         data_rkey,
@@ -694,7 +695,9 @@ pub mod rdma_target {
                             // Dummy implementation: print the RDMA read result.
                             let local_buffer_wrapped =
                                 cl_ctx.free_remote_op_buffer(completed_wr_id as usize)?;
-                            let local_buffer = local_buffer_wrapped.get();
+                            let adapter = RdmaBufferAdapter::from(local_buffer_wrapped);
+                            let local_buffer = local_buffer_wrapped.as_ptr();
+
                             assert!(!local_buffer.is_null());
                             let req_capsule_ctx = cl_ctx.req_capsule_ctx.as_mut();
                             let req_capsule = req_capsule_ctx

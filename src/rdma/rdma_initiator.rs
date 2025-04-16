@@ -1,15 +1,13 @@
 pub mod rdma_initiator {
-    use crate::rdma::buffer_manager::{BufferManager, SafeBufferPtr};
+    use crate::rdma::buffer_manager::{BufferManager, RdmaBufferBlock};
     use crate::rdma::capsule::capsule::RequestCapsuleContext;
-    use crate::rdma::rdma_common;
     use crate::rdma::rdma_common::rdma_binding;
     use crate::rdma::rdma_common::rdma_common::{
         get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, MAX_WR,
     };
-    use crate::rdma::rdma_work_manager::rdma_work_manager::{RDMARemoteOpContext, RdmaWorkManager};
-    use crate::{debug_println_verbose};
+    use crate::rdma::rdma_work_manager::rdma_work_manager::RdmaWorkManager;
+    use crate::debug_println_verbose;
     use std::net::Ipv4Addr;
-    use std::sync::{Arc, RwLock};
     use std::{mem, ptr};
 
     pub struct RdmaInitiator {
@@ -255,7 +253,7 @@ pub mod rdma_initiator {
             &mut self,
             nvme_cid: u16,
             nvme_addr: u64,
-            local_buffer: &mut SafeBufferPtr,
+            local_buffer: &mut RdmaBufferBlock,
             data_len: u32,
         ) -> Result<i32, RdmaTransportError> {
             let wr_id;
@@ -273,7 +271,7 @@ pub mod rdma_initiator {
                 capsule.nvme_address = nvme_addr;
                 capsule.cmd.c_id = nvme_cid;
                 capsule.cmd.opcode = 1;
-                capsule.data_mr_address = local_buffer.get() as u64;
+                capsule.data_mr_address = local_buffer.as_ptr() as u64;
                 capsule.data_mr_r_key = rkey;
                 capsule.data_mr_length = data_len;
             }
@@ -287,7 +285,7 @@ pub mod rdma_initiator {
 
             // assign the buffer containing the data
             self.ctx
-                .set_memory_block(wr_id as usize, local_buffer as *mut SafeBufferPtr);
+                .set_memory_block(wr_id as usize, local_buffer);
             let qp = unsafe { (*self.ctx.cm_id).qp };
             let cq = self.ctx.cq;
             let req_capsule_ctx = self.ctx.req_capsule_ctx.as_mut() as *mut RequestCapsuleContext;
@@ -308,7 +306,7 @@ pub mod rdma_initiator {
             &mut self,
             nvme_cid: u16,
             nvme_addr: u64,
-            local_buffer: &mut SafeBufferPtr,
+            local_buffer: &mut RdmaBufferBlock,
             data_len: u32,
         ) -> Result<i32, RdmaTransportError> {
             let wr_id = self.rwm.allocate_wr_id().unwrap();
@@ -319,7 +317,7 @@ pub mod rdma_initiator {
                 capsule.nvme_address = nvme_addr;
                 capsule.cmd.c_id = nvme_cid;
                 capsule.cmd.opcode = 1;
-                capsule.data_mr_address = local_buffer.get() as u64;
+                capsule.data_mr_address = local_buffer.as_ptr() as u64;
                 capsule.data_mr_r_key = rkey;
                 capsule.data_mr_length = data_len;
             }
@@ -334,7 +332,7 @@ pub mod rdma_initiator {
 
             // assign the buffer containing the data
             self.ctx
-                .set_memory_block(wr_id as usize, local_buffer as *mut SafeBufferPtr);
+                .set_memory_block(wr_id as usize, local_buffer);
             let qp = unsafe { (*self.ctx.cm_id).qp };
             let cq = self.ctx.cq;
             let req_capsule_ctx = self.ctx.req_capsule_ctx.as_mut() as *mut RequestCapsuleContext;

@@ -10,7 +10,7 @@ pub mod rdma_binding {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 pub mod rdma_common {
-    use crate::rdma::buffer_manager::SafeBufferPtr;
+    use crate::rdma::buffer_manager::{RdmaBufferBlock};
     use crate::rdma::capsule::capsule::RequestCapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
     use std::any::Any;
@@ -150,7 +150,7 @@ pub mod rdma_common {
         pub(crate) io_comp_channel: *mut rdma_binding::ibv_comp_channel,
         pub(crate) cq: *mut rdma_binding::ibv_cq,
         pub(crate) req_capsule_ctx: Box<RequestCapsuleContext>,
-        remote_buffers: Vec<Option<SafeBufferPtr>>,
+        remote_buffers: Vec<Option<RdmaBufferBlock>>,
         buffer_mr: *mut rdma_binding::ibv_mr,
     }
 
@@ -190,8 +190,6 @@ pub mod rdma_common {
                     ));
                 }
             }
-
-            // TODO(original code call ibv_req_notify_cq_ex here. But let's try not to do here.)
 
             let mut qp_init_attr = rdma_binding::ibv_qp_init_attr {
                 qp_context: ptr::null_mut(), // optional
@@ -249,16 +247,16 @@ pub mod rdma_common {
             }
         }
 
-        pub fn set_memory_block(&mut self, idx: usize, buffer_ptr: *mut SafeBufferPtr) {
+        pub fn set_memory_block(&mut self, idx: usize, buffer_ptr: *mut RdmaBufferBlock) {
             assert!(!buffer_ptr.is_null());
-            assert!(unsafe { !(*buffer_ptr).get().is_null() });
+            assert!(unsafe { !(*buffer_ptr).as_ptr().is_null() });
             self.remote_buffers[idx] = Some(unsafe { *buffer_ptr });
         }
 
         pub fn get_remote_op_buffer(
             &self,
             idx: usize,
-        ) -> Result<*mut SafeBufferPtr, RdmaTransportError> {
+        ) -> Result<*mut RdmaBufferBlock, RdmaTransportError> {
             assert!(self.remote_buffers[idx].is_some());
             Ok(&mut self.remote_buffers[idx].unwrap())
         }
@@ -266,7 +264,7 @@ pub mod rdma_common {
         pub fn free_remote_op_buffer(
             &mut self,
             idx: usize,
-        ) -> Result<SafeBufferPtr, RdmaTransportError> {
+        ) -> Result<RdmaBufferBlock, RdmaTransportError> {
             assert!(self.remote_buffers[idx].is_some());
             let ret = self.remote_buffers[idx].unwrap();
             self.remote_buffers[idx] = None;

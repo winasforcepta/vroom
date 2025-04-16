@@ -31,6 +31,8 @@ pub struct NvmeCommand {
     pub cdw15: u32,
 }
 
+const NVME_PSDT_SGL: u8 = 0x1 << 6;
+
 impl NvmeCommand {
     pub fn create_io_completion_queue(c_id: u16, qid: u16, ptr: usize, size: u16) -> Self {
         Self {
@@ -191,6 +193,60 @@ impl NvmeCommand {
             cdw15: 0,
         }
     }
+
+    pub fn io_write_sgl(
+        c_id: u16,
+        ns_id: u32,
+        lba: u64,
+        blocks_1: u16,
+        sgl_addr: u64,
+        data_len: u32,
+    ) -> Self {
+        Self {
+            opcode: 1, // Write
+            flags: NVME_PSDT_SGL, // SGL format
+            c_id,
+            ns_id,
+            _rsvd: 0,
+            md_ptr: 0,
+            d_ptr: [sgl_addr, 0], // SGL Descriptor address
+            cdw10: lba as u32,
+            cdw11: (lba >> 32) as u32,
+            cdw12: blocks_1 as u32,
+            cdw13: data_len,      // Length of the actual data
+            cdw14: 0,
+            cdw15: 0,
+        }
+    }
+
+
+    pub fn io_read_sgl(
+        c_id: u16,
+        ns_id: u32,
+        lba: u64,
+        blocks_1: u16,
+        sgl_addr: u64,
+        data_len: u32,
+    ) -> Self {
+        Self {
+            opcode: 2, // Read
+            flags: NVME_PSDT_SGL, // SGL format
+            c_id,
+            ns_id,
+            _rsvd: 0,
+            md_ptr: 0,
+            d_ptr: [sgl_addr, 0],
+            cdw10: lba as u32,
+            cdw11: (lba >> 32) as u32,
+            cdw12: blocks_1 as u32,
+            cdw13: data_len,      // Length of the actual data
+            cdw14: 0,
+            cdw15: 0,
+        }
+    }
+
+
+
 
     pub(crate) fn format_nvm(c_id: u16, ns_id: u32) -> Self {
         Self {

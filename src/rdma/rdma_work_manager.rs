@@ -1,16 +1,13 @@
 pub mod rdma_work_manager {
-    use crate::rdma::buffer_manager::SafeBufferPtr;
     use crate::rdma::capsule::capsule::RequestCapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
-    use crate::rdma::rdma_common::rdma_common::MAX_WR;
     use crate::rdma::ring_buffer::RingBuffer;
-    use crate::{debug_println_verbose};
+    use crate::debug_println_verbose;
     use libc::{c_int, c_uint};
     use std::collections::VecDeque;
     use std::error::Error;
     use std::ffi::CStr;
     use std::os::raw::c_void;
-    use std::sync::{Arc, RwLock};
     use std::{fmt, mem, ptr};
 
     #[derive(Debug)]
@@ -70,90 +67,6 @@ pub mod rdma_work_manager {
 
         fn any_inflight_wr(&self) -> bool {
             self.free_list.len() != self.max_wr_id as usize
-        }
-    }
-
-    pub struct RDMARemoteOpContext {
-        pub(crate) local_buffer_mr: Box<rdma_binding::ibv_mr>,
-        pub(crate) local_buffer: Box<[u8]>, // need to own the buffer
-    }
-
-    impl RDMARemoteOpContext {
-        pub fn allocate_buffer(
-            pd: *mut rdma_binding::ibv_pd,
-            size: usize,
-        ) -> Result<Self, WorkManagerError> {
-            // TODO(use buffer manager)
-            // Allocate local buffer
-            let mut local_buffer = vec![0u8; size].into_boxed_slice();
-            let local_ptr = local_buffer.as_mut_ptr();
-            let mr_box;
-
-            unsafe {
-                let mr = rdma_binding::ibv_reg_mr(
-                    pd,
-                    local_ptr as *mut c_void,
-                    size,
-                    (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
-                        | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
-                        | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
-                        as std::os::raw::c_int,
-                );
-
-                if mr.is_null() {
-                    return Err(WorkManagerError::FailedBufferAllocation);
-                }
-
-                mr_box = Box::from_raw(mr);
-            }
-
-            Ok(Self {
-                local_buffer,
-                local_buffer_mr: mr_box,
-            })
-        }
-
-        pub fn register_buffer(
-            pd: *mut rdma_binding::ibv_pd,
-            local_buffer: Box<[u8]>,
-            size: usize,
-        ) -> Result<Self, WorkManagerError> {
-            // Allocate local buffer
-            let local_ptr = local_buffer.as_ptr();
-            let mr_box = unsafe {
-                let mr = rdma_binding::ibv_reg_mr(
-                    pd,
-                    local_ptr as *mut c_void,
-                    size,
-                    (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
-                        | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
-                        | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
-                        as std::os::raw::c_int,
-                );
-
-                if mr.is_null() {
-                    return Err(WorkManagerError::FailedBufferAllocation);
-                }
-
-                Box::from_raw(mr)
-            };
-
-            Ok(Self {
-                local_buffer,
-                local_buffer_mr: mr_box,
-            })
-        }
-        pub fn get_addr(&self) -> *mut c_void {
-            self.local_buffer_mr.addr.clone()
-        }
-        pub fn get_len(&self) -> usize {
-            self.local_buffer_mr.length.clone()
-        }
-        pub fn get_rkey(&self) -> usize {
-            self.local_buffer_mr.rkey.clone() as usize
-        }
-        pub fn get_lkey(&self) -> usize {
-            self.local_buffer_mr.lkey.clone() as usize
         }
     }
 
