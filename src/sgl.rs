@@ -55,11 +55,17 @@ impl SglChain {
         println!("[SGL] preallocate() called: max_entries = {}, data_block_only = {}", max_entries, data_block_only);
 
         let segment = Dma::allocate(16)?;
+        unsafe {
+            std::ptr::write_bytes(segment.virt, 0, segment.size);
+        }
         let blocks = if data_block_only {
             Dma::allocate(16)?
         } else {
             Dma::allocate(max_entries * 16)?
         };
+        unsafe {
+            std::ptr::write_bytes(blocks.virt, 0, blocks.size);
+        }
 
         assert_eq!(segment.phys % 16, 0, "Segment not 16-byte aligned");
         assert_eq!(blocks.phys % 16, 0, "Blocks not 16-byte aligned");
@@ -87,10 +93,7 @@ impl SglChain {
             println!("  -> Using QEMU compatibility mode (data block only)");
             let desc = SglDescriptor::new_data_block(base_addr, total_len as u32);
             unsafe {
-                std::ptr::write_volatile(
-                    self.segment.virt as *mut SglDescriptor,
-                    desc
-                );
+                std::ptr::write_volatile(self.segment.virt as *mut SglDescriptor, desc);
             }
             return Ok((self.segment.phys as u64, 16));
         }
@@ -116,7 +119,14 @@ impl SglChain {
             return Err("No SGL entries created".into());
         }
 
-        // Skip single-entry optimization — always use segment descriptor for real NVMe
+        if num_entries == 1 {
+            println!("  -> Single descriptor optimization (even in full SGL mode)");
+            unsafe {
+                std::ptr::write_volatile(self.segment.virt as *mut SglDescriptor, self.scratch[0]);
+            }
+            return Ok((self.segment.phys as u64, 16));
+        }
+
         println!("  -> Copying {} descriptors into block list", num_entries);
         unsafe {
             std::ptr::copy_nonoverlapping(
