@@ -786,7 +786,6 @@ impl NvmeDevice {
         let ptr1 = if bytes <= 4096 {
             0
         } else if bytes <= 8192 {
-            // self.buffer.phys as u64 + 4096 // self.page_size
             addr + 4096 // self.page_size
         } else {
             self.prp_list.phys as u64
