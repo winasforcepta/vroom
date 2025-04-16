@@ -87,7 +87,10 @@ impl SglChain {
             println!("  -> Using QEMU compatibility mode (data block only)");
             let desc = SglDescriptor::new_data_block(base_addr, total_len as u32);
             unsafe {
-                std::ptr::write_volatile(self.segment.virt as *mut SglDescriptor, desc);
+                std::ptr::write_volatile(
+                    self.segment.virt as *mut SglDescriptor,
+                    desc
+                );
             }
             return Ok((self.segment.phys as u64, 16));
         }
@@ -100,25 +103,20 @@ impl SglChain {
         while remaining > 0 && num_entries < self.scratch.len() {
             let chunk_size = remaining.min(max_chunk) as u32;
             self.scratch[num_entries] = SglDescriptor::new_data_block(addr, chunk_size);
-            println!("    [{}] Added chunk: addr={:#x}, size={}", num_entries, addr, chunk_size);
+            println!(
+                "    [{}] Added chunk: addr={:#x}, size={}",
+                num_entries, addr, chunk_size
+            );
             addr += chunk_size as u64;
             remaining -= chunk_size as usize;
             num_entries += 1;
         }
 
         if num_entries == 0 {
-            println!("  -> ERROR: No SGL entries created");
             return Err("No SGL entries created".into());
         }
 
-        if num_entries == 1 {
-            println!("  -> Single descriptor optimization");
-            unsafe {
-                std::ptr::write_volatile(self.segment.virt as *mut SglDescriptor, self.scratch[0]);
-            }
-            return Ok((self.segment.phys as u64, 16));
-        }
-
+        // Skip single-entry optimization — always use segment descriptor for real NVMe
         println!("  -> Copying {} descriptors into block list", num_entries);
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -129,7 +127,7 @@ impl SglChain {
 
             let seg_desc = SglDescriptor::new_segment(
                 self.blocks.phys as u64,
-                (num_entries * 16) as u32,
+                (num_entries * std::mem::size_of::<SglDescriptor>()) as u32,
             );
             println!("  -> Segment descriptor: {:?}", seg_desc);
             std::ptr::write_volatile(self.segment.virt as *mut SglDescriptor, seg_desc);
@@ -137,4 +135,5 @@ impl SglChain {
 
         Ok((self.segment.phys as u64, 16))
     }
+
 }

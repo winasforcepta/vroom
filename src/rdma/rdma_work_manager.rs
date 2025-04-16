@@ -290,11 +290,11 @@ pub mod rdma_work_manager {
 
             let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
             unsafe {
-                let mode_str = CStr::from_ptr(rdma_binding::ibv_wr_opcode_str(mode))
-                    .to_string_lossy() // converts to Cow<str>, handles invalid UTF-8 safely
-                    .into_owned();
-                debug_println_verbose!("post_rmt_work: call ibv_post_send_ex. wr_id: {}, mode: {}. local_addr: {}, local_lkey: {}, remote_addr: {}, data_len: {}, remote_rkey: {}"
-                    , wr_id, mode_str, local_buffer_ptr as u64, local_buffer_lkey, remote_addr, data_len, remote_rkey);
+                // let mode_str = CStr::from_ptr(rdma_binding::ibv_wr_opcode_str(mode))
+                //     .to_string_lossy() // converts to Cow<str>, handles invalid UTF-8 safely
+                //     .into_owned();
+                // debug_println_verbose!("post_rmt_work: call ibv_post_send_ex. wr_id: {}, mode: {}. local_addr: {}, local_lkey: {}, remote_addr: {}, data_len: {}, remote_rkey: {}"
+                //     , wr_id, mode_str, local_buffer_ptr as u64, local_buffer_lkey, remote_addr, data_len, remote_rkey);
                 let ret =
                     rdma_binding::ibv_post_send_ex(qp, &mut remote_wr, &mut bad_client_send_wr);
                 if ret != 0 {
@@ -303,14 +303,14 @@ pub mod rdma_work_manager {
                         ret
                     )));
                 }
-                let mode_str = CStr::from_ptr(rdma_binding::ibv_wr_opcode_str(mode))
-                    .to_string_lossy() // converts to Cow<str>, handles invalid UTF-8 safely
-                    .into_owned();
-                debug_println_verbose!(
-                    "[SUCCESS] post_rmt_work: call ibv_post_send_ex. wr_id: {}, mode: {}",
-                    wr_id,
-                    mode_str
-                );
+                // let mode_str = CStr::from_ptr(rdma_binding::ibv_wr_opcode_str(mode))
+                //     .to_string_lossy() // converts to Cow<str>, handles invalid UTF-8 safely
+                //     .into_owned();
+                // debug_println_verbose!(
+                //     "[SUCCESS] post_rmt_work: call ibv_post_send_ex. wr_id: {}, mode: {}",
+                //     wr_id,
+                //     mode_str
+                // );
             }
 
             // self.request_for_notification(cq)?;
