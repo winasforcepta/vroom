@@ -17,10 +17,12 @@ pub mod rdma_common {
     use std::net::Ipv4Addr;
     use std::os::raw::c_int;
     use std::{fmt, io, mem, ptr};
+    use crate::QUEUE_LENGTH;
 
-    pub static CQ_CAPACITY: u32 = 16384u32;
     pub static MAX_SGE: u32 = 1u32;
-    pub static MAX_WR: u32 = 16384u32;
+    // 1024 to follow the VROOM constant
+    pub static MAX_WR: usize = QUEUE_LENGTH;
+    pub static CQ_CAPACITY: usize = QUEUE_LENGTH;
 
     #[derive(Debug)]
     pub enum RdmaTransportError {
@@ -197,8 +199,8 @@ pub mod rdma_common {
                 recv_cq: cq,
                 srq: ptr::null_mut(), // optional,
                 cap: rdma_binding::ibv_qp_cap {
-                    max_send_wr: MAX_WR,
-                    max_recv_wr: MAX_WR,
+                    max_send_wr: MAX_WR as u32,
+                    max_recv_wr: MAX_WR as u32,
                     max_send_sge: MAX_SGE,
                     max_recv_sge: MAX_SGE,
                     max_inline_data: 1,
@@ -256,19 +258,19 @@ pub mod rdma_common {
         pub fn get_remote_op_buffer(
             &self,
             idx: usize,
-        ) -> Result<*mut RdmaBufferBlock, RdmaTransportError> {
+        ) -> Result<RdmaBufferBlock, RdmaTransportError> {
             assert!(self.remote_buffers[idx].is_some());
-            Ok(&mut self.remote_buffers[idx].unwrap())
+            Ok(self.remote_buffers[idx].unwrap())
         }
 
         pub fn free_remote_op_buffer(
             &mut self,
             idx: usize,
-        ) -> Result<RdmaBufferBlock, RdmaTransportError> {
+        ) -> Result<(), RdmaTransportError> {
             assert!(self.remote_buffers[idx].is_some());
             let ret = self.remote_buffers[idx].unwrap();
             self.remote_buffers[idx] = None;
-            Ok(ret)
+            Ok(())
         }
 
         pub fn get_local_buffer_lkey(&self) -> u32 {

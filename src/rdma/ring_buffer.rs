@@ -6,7 +6,6 @@ pub struct RingBuffer {
 }
 
 impl RingBuffer {
-    /// Creates a new ring buffer with a fixed capacity.
     pub fn new(capacity: usize) -> Self {
         // Pre-allocate the vector with default values.
         RingBuffer {
@@ -17,8 +16,6 @@ impl RingBuffer {
         }
     }
 
-    /// Inserts a value into the ring buffer in O(1) time.
-    /// Returns false if the buffer is full.
     pub fn insert(&mut self, value: u16) -> bool {
         if self.count == self.capacity {
             return false; // Buffer full.
@@ -30,8 +27,6 @@ impl RingBuffer {
         true
     }
 
-    /// Removes the first occurrence of `value` from the buffer by swapping it with the tail element.
-    /// Returns true if the value was found and removed.
     pub fn remove(&mut self, value: u16) -> bool {
         if self.count == 0 {
             return false; // Buffer empty.

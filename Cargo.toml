@@ -27,3 +27,8 @@ cc = "1.2.17"
 
 [profile.release]
 debug = true
+
+[package.metadata.rust-analyzer]
+check-cfg = ["cfg(debug_mode_verbose)"]
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ["cfg(debug_mode_verbose)"] }

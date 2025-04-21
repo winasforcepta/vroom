@@ -268,7 +268,7 @@ pub mod rdma_initiator {
 
             {
                 let capsule = &mut self.ctx.req_capsule_ctx.req_capsules[wr_id as usize];
-                capsule.nvme_address = nvme_addr;
+                capsule.lba = nvme_addr;
                 capsule.cmd.c_id = nvme_cid;
                 capsule.cmd.opcode = 1;
                 capsule.data_mr_address = local_buffer.as_ptr() as u64;
@@ -314,7 +314,7 @@ pub mod rdma_initiator {
 
             {
                 let capsule = &mut self.ctx.req_capsule_ctx.req_capsules[wr_id as usize];
-                capsule.nvme_address = nvme_addr;
+                capsule.lba = nvme_addr;
                 capsule.cmd.c_id = nvme_cid;
                 capsule.cmd.opcode = 1;
                 capsule.data_mr_address = local_buffer.as_ptr() as u64;

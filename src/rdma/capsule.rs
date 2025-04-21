@@ -35,7 +35,7 @@ pub mod capsule {
         pub(crate) data_mr_address: u64,
         pub(crate) data_mr_length: u32,
         pub(crate) data_mr_r_key: u32,
-        pub(crate) nvme_address: u64,
+        pub(crate) lba: u64,
     }
 
     impl NVMeCapsule {
@@ -45,7 +45,7 @@ pub mod capsule {
                 data_mr_address: 0,
                 data_mr_length: 0,
                 data_mr_r_key: 0,
-                nvme_address: 0,
+                lba: 0,
             }
         }
     }
@@ -59,7 +59,7 @@ pub mod capsule {
                 self.data_mr_address,
                 self.data_mr_length,
                 self.data_mr_r_key,
-                self.nvme_address
+                self.lba
             )
         }
     }
@@ -92,6 +92,7 @@ pub mod capsule {
     pub struct RequestCapsuleContext {
         pub(crate) req_capsules: Vec<NVMeCapsule>,
         pub(crate) resp_capsules: Vec<NVMeResponseCapsule>,
+
         // Unfortunately, we don't have direct control over the placement of
         //  ibv_mr and ibv_sge objects.
         req_capsule_mrs: Vec<*mut rdma_binding::ibv_mr>,

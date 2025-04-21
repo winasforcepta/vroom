@@ -1,12 +1,11 @@
 use crate::cmd::NvmeCommand;
-use crate::memory::{Dma, DmaBufferLike, DmaSlice};
+use crate::memory::{Dma, DmaSlice};
 use crate::pci::pci_map_resource;
 use crate::queues::*;
 use crate::{NvmeNamespace, NvmeStats, HUGE_PAGE_SIZE};
 use std::collections::HashMap;
 use std::error::Error;
 use std::hint::spin_loop;
-use crate::sgl::SglChain;
 
 // clippy doesnt like this
 #[allow(unused, clippy::upper_case_acronyms)]
@@ -150,43 +149,36 @@ impl NvmeQueuePair {
         reqs
     }
 
-    pub fn submit_io_sgl(
-        &mut self,
-        data: &impl DmaSlice,
-        mut lba: u64,
-        write: bool,
-        data_block_only: bool,
-    ) -> usize {
+    pub fn submit_io_with_cid(&mut self, data: &impl DmaSlice, mut lba: u64, write: bool, c_id: u16) -> usize {
         let mut reqs = 0;
-        let mut sgl = SglChain::preallocate(8, data_block_only)
-            .expect("Failed to preallocate SGL");
-
         for chunk in data.chunks(2 * 4096) {
             let blocks = (chunk.slice.len() as u64 + 512 - 1) / 512;
 
-            let (sgl_addr, sgl_len) = sgl.fill_from(
-                chunk.phys_addr as u64,
-                chunk.slice.len(),
-                4096,
-            ).expect("Failed to build SGL");
+            let addr = chunk.phys_addr as u64;
+            let bytes = blocks * 512;
+            let ptr1 = if bytes <= 4096 {
+                0
+            } else {
+                addr + 4096 // self.page_size
+            };
 
             let entry = if write {
-                NvmeCommand::io_write_sgl(
-                    self.id << 11 | self.sub_queue.tail as u16,
+                NvmeCommand::io_write(
+                    self.id << 11 | c_id,
                     1,
                     lba,
                     blocks as u16 - 1,
-                    sgl_addr,
-                    sgl_len,
+                    addr,
+                    ptr1,
                 )
             } else {
-                NvmeCommand::io_read_sgl(
-                    self.id << 11 | self.sub_queue.tail as u16,
+                NvmeCommand::io_read(
+                    self.id << 11 | c_id,
                     1,
                     lba,
                     blocks as u16 - 1,
-                    sgl_addr,
-                    sgl_len,
+                    addr,
+                    ptr1,
                 )
             };
 
@@ -204,7 +196,6 @@ impl NvmeQueuePair {
         }
         reqs
     }
-
 
     // TODO: maybe return result
     pub fn complete_io(&mut self, n: usize) -> Option<u16> {
@@ -247,6 +238,30 @@ impl NvmeQueuePair {
             return Some(());
         }
         None
+    }
+
+    pub fn quick_poll_completion(&mut self) -> Option<NvmeCompletion> {
+        if let Some((tail, c_entry, _)) = self.comp_queue.complete() {
+            unsafe {
+                std::ptr::write_volatile(self.comp_queue.doorbell as *mut u32, tail as u32);
+            }
+            self.sub_queue.head = c_entry.sq_head as usize;
+
+            let status = c_entry.status >> 1;
+            if status != 0 {
+                eprintln!(
+                    "Status: 0x{:x}, Status Code 0x{:x}, Status Code Type: 0x{:x}",
+                    status,
+                    status & 0xFF,
+                    (status >> 8) & 0x7
+                );
+                eprintln!("{:?}", c_entry);
+            }
+
+            Some(c_entry)
+        } else {
+            None
+        }
     }
 }
 
@@ -531,60 +546,6 @@ impl NvmeDevice {
 
         Ok(())
     }
-
-    pub fn write_sgl(
-        &mut self,
-        data: &impl DmaSlice,
-        lba: u64,
-        data_block_only: bool
-    ) -> Result<(), Box<dyn Error>> {
-        println!("[write_sgl] Called with LBA = {}, data_block_only = {}", lba, data_block_only);
-        let ns = self.namespaces.get(&1).ok_or("Namespace not found")?;
-        let mut sgl = SglChain::preallocate(8, data_block_only)?;
-        let block_size = ns.block_size.clone();
-
-        for chunk in data.chunks(128 * 4096) {
-            let blocks = (chunk.slice.len() as u64 + block_size - 1) / block_size;
-            println!("[write_sgl] Chunk: addr = {:#x}, size = {}, blocks = {}", chunk.phys_addr, chunk.slice.len(), blocks);
-            let (sgl_addr, sgl_len) = sgl.fill_from(
-                chunk.phys_addr as u64,
-                chunk.slice.len(),
-                4096,
-            )?;
-            println!("[write_sgl] SGL address: {:#x}, length: {}", sgl_addr, sgl_len);
-
-            self.namespace_io_sgl(1, blocks, lba, sgl_addr, chunk.slice.len() as u32, true)?;
-        }
-        Ok(())
-    }
-
-
-    pub fn read_sgl(
-        &mut self,
-        dest: &impl DmaSlice,
-        lba: u64,
-        data_block_only: bool
-    ) -> Result<(), Box<dyn Error>> {
-        println!("[write_sgl] Called with LBA = {}, data_block_only = {}", lba, data_block_only);
-        let ns = self.namespaces.get(&1).ok_or("Namespace not found")?;
-        let mut sgl = SglChain::preallocate(8, data_block_only)?;
-        let block_size = ns.block_size.clone();
-
-        for chunk in dest.chunks(128 * 4096) {
-            let blocks = (chunk.slice.len() as u64 + block_size - 1) / block_size;
-            println!("[read_sgl] Chunk: addr = {:#x}, size = {}, blocks = {}", chunk.phys_addr, chunk.slice.len(), blocks);
-            let (sgl_addr, sgl_len) = sgl.fill_from(
-                chunk.phys_addr as u64,
-                chunk.slice.len(),
-                4096,
-            )?;
-            println!("[read_sgl] SGL address: {:#x}, length: {}", sgl_addr, sgl_len);
-
-            self.namespace_io_sgl(1, blocks, lba, sgl_addr, chunk.slice.len() as u32, false)?;
-        }
-        Ok(())
-    }
-
 
     pub fn read(&mut self, dest: &impl DmaSlice, mut lba: u64) -> Result<(), Box<dyn Error>> {
         // let ns = *self.namespaces.get(&1).unwrap();

@@ -10,6 +10,10 @@ struct Args {
     #[arg(long)]
     ip: IpAddr,
 
+    /// Device PCI address
+    #[arg(long)]
+    pci_addr: String,
+
     /// Reserved memory size in GB (default: 2)
     #[arg(long = "memory-gb", default_value_t = 2)]
     memory: usize,
@@ -31,6 +35,7 @@ fn main() {
     let ip = args.ip;
     let reserved_bytes = args.memory * 1024 * 1024 * 1024; // Convert GB to bytes
     let block_size = args.block_size;
+    let pci_addr = args.pci_addr;
 
     let ipv4 = match ip {
         IpAddr::V4(addr) => addr,
@@ -40,7 +45,7 @@ fn main() {
         }
     };
 
-    let mut target = RdmaTarget::new(ipv4, read, write, reserved_bytes, block_size).unwrap();
+    let mut target = RdmaTarget::new(ipv4, read, write, reserved_bytes, block_size, &pci_addr).expect("Failed to create RDMA target");
     println!("Server is listening");
     target.run().expect("Fails to start RDMA target.");
 }

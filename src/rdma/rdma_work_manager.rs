@@ -6,8 +6,6 @@ pub mod rdma_work_manager {
     use libc::{c_int, c_uint};
     use std::collections::VecDeque;
     use std::error::Error;
-    use std::ffi::CStr;
-    use std::os::raw::c_void;
     use std::{fmt, mem, ptr};
 
     #[derive(Debug)]
@@ -161,11 +159,9 @@ pub mod rdma_work_manager {
             &self,
             wr_id: u16,
             qp: *mut rdma_binding::ibv_qp,
-            cq: *mut rdma_binding::ibv_cq,
-            io_req_ctx: &mut RequestCapsuleContext,
+            sge: *mut rdma_binding::ibv_sge,
         ) -> Result<(), WorkManagerError> {
             let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
-            let sge = io_req_ctx.get_resp_sge(wr_id as usize).unwrap();
 
             let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
                 wr_id: wr_id as u64,
