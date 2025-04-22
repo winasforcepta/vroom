@@ -4,19 +4,39 @@ pub mod rdma_binding {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 pub mod rdma_common {
-    use crate::rdma::buffer_manager::{BufferManagerIdx};
+    use crate::rdma::buffer_manager::{BufferManagerIdx, ThreadSafeDmaHandle};
     use crate::rdma::capsule::capsule::CapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
     use std::any::Any;
     use std::net::Ipv4Addr;
     use std::os::raw::c_int;
     use std::{fmt, io, mem, ptr};
+    use crate::memory::Dma;
     use crate::QUEUE_LENGTH;
 
     pub static MAX_SGE: u32 = 1u32;
     // 1024 to follow the VROOM constant
     pub static MAX_WR: usize = QUEUE_LENGTH;
     pub static CQ_CAPACITY: usize = QUEUE_LENGTH;
+
+    pub struct SendableIbvQp {
+        ptr: ptr::NonNull<rdma_binding::ibv_qp>,
+    }
+
+    impl SendableIbvQp {
+        pub unsafe fn new(ptr: *mut rdma_binding::ibv_qp) -> Self {
+            SendableIbvQp {
+                ptr: ptr::NonNull::new(ptr).expect("Pointer to ibv_qp must not be null"),
+            }
+        }
+
+        pub fn as_ptr(&self) -> *mut rdma_binding::ibv_qp {
+            self.ptr.as_ptr()
+        }
+    }
+
+    unsafe impl Send for SendableIbvQp {}
+    unsafe impl Sync for SendableIbvQp {}
 
     #[derive(Debug)]
     pub enum RdmaTransportError {
@@ -145,7 +165,6 @@ pub mod rdma_common {
         pub(crate) pd: *mut rdma_binding::ibv_pd,
         pub(crate) io_comp_channel: *mut rdma_binding::ibv_comp_channel,
         pub(crate) cq: *mut rdma_binding::ibv_cq,
-        pub(crate) capsule_ctx: Box<CapsuleContext>,
         wrid_to_buffer_idx: Vec<Option<BufferManagerIdx>>,
     }
 
@@ -220,7 +239,6 @@ pub mod rdma_common {
                 pd: pd_ptr,
                 io_comp_channel,
                 cq,
-                capsule_ctx: req_capsule_ctx,
                 wrid_to_buffer_idx: std::iter::repeat_with(|| None)
                     .take(max_wr as usize)
                     .collect(),

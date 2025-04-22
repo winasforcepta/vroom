@@ -12,6 +12,7 @@ pub mod rdma_initiator {
 
     pub struct RdmaInitiator {
         server_sockaddr: rdma_binding::sockaddr_in,
+        capsule_context: CapsuleContext,
         ctx: ClientRdmaContext,
         pub(crate) rwm: RdmaWorkManager,
         wr_id_to_buffer: Vec<Option<*mut u8>>
@@ -237,6 +238,7 @@ pub mod rdma_initiator {
             debug_println!("The client is connected successfully");
             Ok(Self {
                 server_sockaddr,
+                capsule_context: CapsuleContext::new(pd_ptr, MAX_WR as u16).unwrap(),
                 ctx,
                 rwm: RdmaWorkManager::new(MAX_WR as u16),
                 wr_id_to_buffer: std::iter::repeat_with(|| None)
@@ -261,7 +263,7 @@ pub mod rdma_initiator {
                 }
             }
 
-            let capsule = &mut self.ctx.capsule_ctx.req_capsules[wr_id as usize];
+            let capsule = &mut self.capsule_context.req_capsules[wr_id as usize];
             capsule.lba = nvme_addr;
             capsule.cmd.c_id = nvme_cid;
             capsule.cmd.opcode = 1;
@@ -282,13 +284,13 @@ pub mod rdma_initiator {
             let qp = unsafe { (*self.ctx.cm_id).qp };
 
             // First post the rcv work to prepare for response
-            let resp_sge = self.ctx.capsule_ctx.get_resp_sge(wr_id as usize).unwrap();
+            let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
             self.rwm
                 .post_rcv_resp_work(wr_id, qp, resp_sge)
                 .unwrap();
 
             // Then send the request
-            let req_sge = self.ctx.capsule_ctx.get_req_sge(wr_id as usize).unwrap();
+            let req_sge = self.capsule_context.get_req_sge(wr_id as usize).unwrap();
             self.rwm
                 .post_send_request_work(wr_id, qp, req_sge)
                 .map_err(|_| {
@@ -309,7 +311,7 @@ pub mod rdma_initiator {
             rkey: u32
         ) -> Result<i32, RdmaTransportError> {
             let wr_id = self.rwm.allocate_wr_id().unwrap();
-            let capsule = &mut self.ctx.capsule_ctx.req_capsules[wr_id as usize];
+            let capsule = &mut self.capsule_context.req_capsules[wr_id as usize];
             capsule.lba = nvme_addr;
             capsule.cmd.c_id = nvme_cid;
             capsule.cmd.opcode = 1;
@@ -328,13 +330,12 @@ pub mod rdma_initiator {
             // assign the buffer containing the data
             self.wr_id_to_buffer[wr_id as usize] = Some(local_buffer);
             let qp = unsafe { (*self.ctx.cm_id).qp };
-            let req_capsule_ctx = self.ctx.capsule_ctx.as_mut() as *mut CapsuleContext;
             // First post the rcv work to prepare for response
-            let resp_sge = self.ctx.capsule_ctx.get_resp_sge(wr_id as usize).unwrap();
+            let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
             self.rwm
                 .post_rcv_resp_work(wr_id, qp, resp_sge)
                 .unwrap();
-            let req_sge = self.ctx.capsule_ctx.get_req_sge(wr_id as usize).unwrap();
+            let req_sge = self.capsule_context.get_req_sge(wr_id as usize).unwrap();
             self.rwm
                 .post_send_request_work(wr_id, qp, req_sge)
                 .map_err(|_| {

@@ -2,11 +2,9 @@ pub mod rdma_target {
     use crate::queues::NvmeCompletion;
     use crate::rdma::buffer_manager::{BufferManager, BufferManagerIdx, ThreadSafeDmaHandle};
     use crate::rdma::rdma_common::rdma_binding;
-    use crate::rdma::rdma_common::rdma_common::{
-        get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, MAX_WR,
-    };
+    use crate::rdma::rdma_common::rdma_common::{get_rdma_event_type_string, process_cm_event, ClientRdmaContext, SendableIbvQp, RdmaTransportError, MAX_WR};
     use crate::rdma::rdma_common::*;
-    use crate::rdma::rdma_work_manager::rdma_work_manager::RdmaWorkManager;
+    use crate::rdma::rdma_work_manager::rdma_work_manager::{post_rmt_work, post_send_response_work, RdmaWorkManager};
     use crate::{memory, NvmeDevice, NvmeQueuePair, QUEUE_LENGTH};
     use std::collections::{HashMap, VecDeque};
     use std::net::Ipv4Addr;
@@ -16,9 +14,13 @@ pub mod rdma_target {
     use std::thread::JoinHandle;
     use std::{io, mem, ptr, thread};
     use std::ffi::CStr;
+    use std::time::Duration;
+    use libc::sleep;
     use crate::memory::DmaSlice;
+    use crate::rdma::capsule::capsule::{CapsuleContext, NVMeCapsule, NVMeResponseCapsule};
 
     type InternalNVMeCommandType = (
+        u16, // cid
         usize, // start offset
         u64, // nvme LBA
         bool, // is write
@@ -274,48 +276,68 @@ pub mod rdma_target {
                         let thread_signal = signal.clone();
                         let thread_buffer_manager = self.buffer_manager_mtx_arc.clone();
                         let nvme_io_request_arc: Arc<Mutex<VecDeque<InternalNVMeCommandType>>> = Arc::new(Mutex::new(VecDeque::new()));
-                        let nvme_io_completion_arc: Arc<Mutex<VecDeque<NvmeCompletion>>> = Arc::new(Mutex::new(VecDeque::new()));
                         let cm_event_arc = Arc::from(Mutex::from(CmEventPtr(cm_event)));
                         let cm_event_channel_arc_clone = self.ctx.cm_event_channel_arc.clone();
                         let nvme_io_request_arc_c1 = nvme_io_request_arc.clone();
-                        let nvme_io_completion_arc_c1 = nvme_io_completion_arc.clone();
                         let nvme_io_request_arc_c2 = nvme_io_request_arc.clone();
-                        let nvme_io_completion_arc_c2 = nvme_io_completion_arc.clone();
                         let signal_clone_1 = thread_signal.clone();
                         let signal_clone_2 = thread_signal.clone();
                         let block_size = self.block_size.clone();
+                        let capsule_context_arc: Arc<Mutex<Option<CapsuleContext>>> = Arc::from(Mutex::new(None));
+                        let capsule_context_arc_clone_1 = capsule_context_arc.clone();
+                        let capsule_context_arc_clone_2 = capsule_context_arc.clone();
+                        let is_op_ready = Arc::new(AtomicBool::new(false));
+                        let is_op_ready_arc_1 = is_op_ready.clone();
+                        let qp_arc: Arc<Mutex<Option<SendableIbvQp>>> = Arc::from(Mutex::new(None));
+                        let qp_arc_clone_1 = qp_arc.clone();
+                        let qp_arc_clone_2 = qp_arc.clone();
 
-                        let rdma_thread_handle = thread::spawn({
-                            move || {
+                        let rdma_thread_handle = thread::Builder::new()
+                            .name("RDMA thread".to_string())
+                            .spawn( move || {
                                 RdmaTarget::_run_rdma_thread(
                                     cm_event_channel_arc_clone,
                                     cm_event_arc.clone(),
                                     signal_clone_1,
                                     thread_buffer_manager,
                                     nvme_io_request_arc_c1,
-                                    nvme_io_completion_arc_c1,
-                                    block_size
+                                    block_size,
+                                    capsule_context_arc_clone_1,
+                                    is_op_ready_arc_1,
+                                    qp_arc_clone_1
                                 ).expect(format!("PANIC: handling RDMA thread {}", client_number.to_string()).as_str());
-                            }
-                        });
+                            }).expect("Failed to run RDMA thread");
                         let nvme_device_arc_clone = self.nvme_device_arc.clone();
 
-                        let nvme_device_thread_handle = thread::spawn(move || {
-                            let nvme_queue_pair = {
-                                let mut device = nvme_device_arc_clone.lock().unwrap();
-                                device.create_io_queue_pair(QUEUE_LENGTH)
-                            }.map_err(|_| {
-                                RdmaTransportError::OpFailed("Failed to create NMVe Device Queue Pair".into())
-                            }).unwrap();
+                        while !is_op_ready.load(Ordering::SeqCst) {
+                            thread::sleep(Duration::from_millis(1000));
+                        }
 
-                            RdmaTarget::_run_nvme_device_thread(
-                                nvme_queue_pair,
-                                nvme_io_request_arc_c2,
-                                nvme_io_completion_arc_c2,
-                                base_dma_handler,
-                                signal_clone_2
-                            ).expect(format!("PANIC: handling NVMe Device thread {}", client_number.to_string()).as_str());
-                        });
+                        let buffer_lkey = unsafe {
+                            let mut bm = self.buffer_manager_mtx_arc.lock().unwrap();
+                            bm.get_lkey().unwrap()
+                        };
+
+                        let nvme_device_thread_handle = thread::Builder::new()
+                            .name("NVMe Device thread".to_string())
+                            .spawn(move || {
+                                let nvme_queue_pair = {
+                                    let mut device = nvme_device_arc_clone.lock().unwrap();
+                                    device.create_io_queue_pair(QUEUE_LENGTH)
+                                }.map_err(|_| {
+                                    RdmaTransportError::OpFailed("Failed to create NMVe Device Queue Pair".into())
+                                }).unwrap();
+
+                                RdmaTarget::_run_nvme_device_thread(
+                                    nvme_queue_pair,
+                                    nvme_io_request_arc_c2,
+                                    base_dma_handler,
+                                    signal_clone_2,
+                                    qp_arc_clone_2,
+                                    capsule_context_arc_clone_2,
+                                    buffer_lkey
+                                ).expect(format!("PANIC: handling NVMe Device thread {}", client_number.to_string()).as_str());
+                            }).expect("Failed to run NVMe Device thread");
 
                         client_number = client_number + 1;
                         self.client_handlers.push((rdma_thread_handle, nvme_device_thread_handle));
@@ -387,8 +409,10 @@ pub mod rdma_target {
             running_signal: Arc<AtomicBool>,
             buffer_manager_arc: Arc<Mutex<BufferManager>>,
             internal_command_queue_arc: Arc<Mutex<VecDeque<InternalNVMeCommandType>>>,
-            internal_completion_queue_arc: Arc<Mutex<VecDeque<NvmeCompletion>>>,
-            block_size: usize
+            block_size: usize,
+            capsule_context_arc: Arc<Mutex<Option<CapsuleContext>>>,
+            is_op_ready_arc: Arc<AtomicBool>,
+            qp_arc: Arc<Mutex<Option<SendableIbvQp>>>
         ) -> Result<i32, RdmaTransportError> {
             debug_println_verbose!("Received RDMA_CM_EVENT_CONNECT_REQUEST...");
             let cm_id_ptr;
@@ -438,6 +462,10 @@ pub mod rdma_target {
             conn_param.initiator_depth = u8::MAX;
             // This tell how many outstanding requests we expect other side to handle
             conn_param.responder_resources = u8::MAX;
+            {
+                let mut capsule_context = capsule_context_arc.lock().unwrap();
+                *capsule_context = Some(CapsuleContext::new(pd_ptr, MAX_WR as u16).unwrap());
+            }
             let mut client_context = ClientRdmaContext::new(cm_id_ptr, pd_ptr, MAX_WR as u16)?;
 
             unsafe {
@@ -491,19 +519,27 @@ pub mod rdma_target {
             }
 
             let mut rdma_work_manager = RdmaWorkManager::new(MAX_WR as u16);
-            let qp = unsafe {
-                (*client_context.cm_id).qp
+            unsafe {
+                let mut sendable_qp = qp_arc.lock().unwrap();
+                *sendable_qp = Some(SendableIbvQp::new((*client_context.cm_id).qp));
             };
+
             debug_println_verbose!("Handling client thread start.");
             // Initially post recv WR. Saturate the queue.
             debug_println_verbose!("Posting rcv work");
             while let Some(wr_id) = rdma_work_manager.allocate_wr_id() {
-                let sge = client_context.capsule_ctx.get_req_sge(wr_id as usize).unwrap();
+                let sge = {
+                    let mut capsule_ctx = capsule_context_arc.lock().unwrap();
+                    assert!(capsule_ctx.is_some());
+                    capsule_ctx.as_mut().unwrap().get_req_sge(wr_id as usize).unwrap()
+                };
+                let mut qp = qp_arc.lock().unwrap().as_mut().unwrap().as_ptr();
                 rdma_work_manager
                     .post_rcv_req_work(wr_id, qp, sge)
                     .unwrap();
             }
             debug_println_verbose!("Posting rcv work: success");
+            is_op_ready_arc.store(true, Ordering::SeqCst);
             let mut any_inflight_wr = rdma_work_manager.any_inflight_wr();
             while running_signal.load(Ordering::SeqCst) || any_inflight_wr {
                 // idea: for every loop:
@@ -513,75 +549,6 @@ pub mod rdma_target {
                 debug_println!("Polling RDMA completion....");
                 rdma_work_manager.poll_completed_works(client_context.io_comp_channel, client_context.cq).unwrap();
                 loop {
-                    {
-                        debug_println_verbose!("Polling NVMe completion queue....");
-                        let mut completion_queue = internal_completion_queue_arc.lock().unwrap();
-                        while let Some(completion) = completion_queue.pop_front() {
-                            let (
-                                opcode,
-                                data_mr_address,
-                                data_mr_r_key,
-                                data_mr_length
-                            ) = {
-                                let (req_capsule, _) = client_context
-                                    .capsule_ctx
-                                    .get_capsule_pair(completion.c_id as usize)
-                                    .unwrap();
-
-                                (
-                                    req_capsule.cmd.opcode.clone(),
-                                    req_capsule.data_mr_address.clone(),
-                                    req_capsule.data_mr_r_key.clone(),
-                                    req_capsule.data_mr_length.clone()
-                                )
-                            };
-                            let resp_sge = {
-                                client_context.capsule_ctx.get_resp_sge(completion.c_id as usize).unwrap()
-                            };
-
-                            match opcode {
-                                1 => { // NVMe write is completed -> send response
-                                    debug_println_verbose!("Found NVMe device write I/O completion ....");
-                                    {
-                                        let (_, resp_capsule) = client_context
-                                            .capsule_ctx
-                                            .get_capsule_pair(completion.c_id as usize)
-                                            .unwrap();
-                                        resp_capsule.status = completion.status as i16;
-                                        resp_capsule.cmd_id = completion.c_id;
-                                    }
-
-                                    rdma_work_manager.post_send_response_work(
-                                        completion.c_id,
-                                        qp,
-                                        resp_sge,
-                                    ).unwrap();
-                                },
-                                2 => { // NVMe read is completed -> post RDMA remote write
-                                    debug_println_verbose!("Found NVMe device read I/O completion ....");
-                                    let buffer_idx = client_context.get_remote_op_buffer(completion.c_id as usize)?;
-
-                                    let (buffer_virtual_add, _, _, local_buffer_l_key) = {
-                                        let mut buffer_manager = buffer_manager_arc.lock().unwrap();
-                                        buffer_manager.get_memory_info(buffer_idx)
-                                    };
-
-                                    rdma_work_manager.post_rmt_work(
-                                        completion.c_id,
-                                        qp,
-                                        buffer_virtual_add,
-                                        local_buffer_l_key,
-                                        data_mr_address,
-                                        data_mr_r_key,
-                                        data_mr_length,
-                                        rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_WRITE,
-                                    ).unwrap();
-                                },
-                                _ => {}
-                            }
-                        }
-                    }
-
                     let completed_wr_id;
                     let op_code;
                     let op_code_str;
@@ -657,20 +624,16 @@ pub mod rdma_target {
                         rdma_binding::ibv_wc_opcode_IBV_WC_RECV => {
                             // we got the capsule.
                             // process read/write accordingly
-                            let (data_mr_address, data_mr_rkey, cmd_opcode, data_mr_len, device_lba) = {
-                                let (capsule, _) = client_context
-                                    .capsule_ctx
-                                    .as_mut()
-                                    .get_capsule_pair(completed_wr_id as usize)
-                                    .unwrap();
-
-                                (capsule.data_mr_address.clone(), capsule.data_mr_r_key.clone(), capsule.cmd.opcode.clone(), capsule.data_mr_length.clone() as usize, capsule.lba.clone())
+                            let (cmd, lba, virtual_addr, data_len, r_key) = {
+                                let mut capsule_ctx = capsule_context_arc.lock().unwrap();
+                                assert!(capsule_ctx.is_some());
+                                capsule_ctx.as_mut().unwrap().get_request_capsule_content(completed_wr_id as usize).unwrap()
                             };
 
                             debug_println!(
                                 "received I/O request. cmd_opcode: {}, len: {}",
-                                cmd_opcode,
-                                data_mr_len
+                                cmd.opcode,
+                                data_len
                             );
 
                             let ((buffer_virtual_add, _, _, _), buffer_idx, lkey) = {
@@ -684,22 +647,23 @@ pub mod rdma_target {
                                 (buffer_manager.get_memory_info(buffer_idx), buffer_idx, lkey)
                             };
 
-                            match cmd_opcode {
+                            match cmd.opcode {
                                 1 => { // NVMe write: RDMA remote read -> NVMe write -> RDMA send response
-                                    rdma_work_manager.post_rmt_work(
+                                    let mut qp = qp_arc.lock().unwrap().as_mut().unwrap().as_ptr();
+                                    post_rmt_work(
                                         completed_wr_id as u16,
                                         qp,
                                         buffer_virtual_add,
                                         lkey,
-                                        data_mr_address,
-                                        data_mr_rkey,
-                                        data_mr_len as u32,
+                                        virtual_addr,
+                                        r_key,
+                                        data_len,
                                         rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_READ,
                                     ).unwrap();
                                 },
                                 2 => { // NVMe read: NVMe read -> RDMA remote write -> RDMA send response
                                     let mut command_queue = internal_command_queue_arc.lock().unwrap();
-                                    command_queue.push_back((buffer_idx as usize * block_size, device_lba, false, data_mr_len));
+                                    command_queue.push_back((completed_wr_id as u16, buffer_idx as usize * block_size, lba, false, data_len as usize));
                                 },
                                 _ => {}
                             }
@@ -714,30 +678,42 @@ pub mod rdma_target {
                                 client_context.free_remote_op_buffer(completed_wr_id as usize)?;
                                 rdma_work_manager.release_wr(completed_wr_id as u16).unwrap();
                                 let new_wr_id = rdma_work_manager.allocate_wr_id().unwrap();
-                                let sge = client_context.capsule_ctx.get_req_sge(new_wr_id as usize).unwrap();
+                                let sge = {
+                                    let mut capsule_ctx = capsule_context_arc.lock().unwrap();
+                                    assert!(capsule_ctx.is_some());
+                                    capsule_ctx.as_mut().unwrap().get_req_sge(new_wr_id as usize).unwrap()
+                                };
                                 debug_println_verbose!("Posting another receive request with wr_id={}", completed_wr_id);
+                                let mut qp = qp_arc.lock().unwrap().as_mut().unwrap().as_ptr();
                                 rdma_work_manager.post_rcv_req_work(new_wr_id, qp, sge).unwrap();
                             }
                         }
                         rdma_binding::ibv_wc_opcode_IBV_WC_RDMA_READ => {
                             // This is a write I/O. Hence, call the send_nvme_io_write()
                             let buffer_idx = client_context.get_remote_op_buffer(completed_wr_id as usize)?;
-                            let (_, lba, _, mr_len, _) = client_context.capsule_ctx
-                                .get_request_capsule_content(completed_wr_id as usize).unwrap();
+                            let (_cmd, lba, _virtual_addr, data_len, _r_key) = {
+                                let mut capsule_ctx = capsule_context_arc.lock().unwrap();
+                                assert!(capsule_ctx.is_some());
+                                capsule_ctx.as_mut().unwrap().get_request_capsule_content(completed_wr_id as usize).unwrap()
+                            };
                             let mut command_queue = internal_command_queue_arc.lock().unwrap();
-                            command_queue.push_back((buffer_idx as usize * block_size, lba, true, mr_len as usize));
+                            command_queue.push_back((completed_wr_id as u16, buffer_idx as usize * block_size, lba, true, data_len as usize));
                         }
                         rdma_binding::ibv_wc_opcode_IBV_WC_RDMA_WRITE => {
                             // This is a read I/O. This means the final remote write has been completed. Then, send response
-                            let (req_capsule, resp_capsule) = client_context.capsule_ctx
-                                .get_capsule_pair(completed_wr_id as usize)
-                                .unwrap();
-                            let nvme_cid = req_capsule.cmd.c_id;
-                            resp_capsule.cmd_id = nvme_cid.clone();
-                            resp_capsule.status = 0;
-                            let resp_sge = client_context.capsule_ctx.get_req_sge(completed_wr_id as usize).unwrap();
+                            let resp_sge = {
+                                let mut capsule_ctx = capsule_context_arc.lock().unwrap();
+                                assert!(capsule_ctx.is_some());
+                                let (req_capsule, resp_capsule) = capsule_ctx.as_mut().unwrap().get_capsule_pair(completed_wr_id as usize).unwrap();
+                                let nvme_cid = req_capsule.cmd.c_id;
+                                resp_capsule.cmd_id = nvme_cid.clone();
+                                resp_capsule.status = 0;
+                                capsule_ctx.as_mut().unwrap().get_resp_sge(completed_wr_id as usize).unwrap()
+                            };
+
                             assert!(!resp_sge.is_null());
-                            rdma_work_manager.post_send_response_work(
+                            let mut qp = qp_arc.lock().unwrap().as_mut().unwrap().as_ptr();
+                            post_send_response_work(
                                 completed_wr_id as u16,
                                 qp,
                                 resp_sge,
@@ -756,34 +732,80 @@ pub mod rdma_target {
         fn _run_nvme_device_thread(
             mut nvme_queue_pair: NvmeQueuePair,
             internal_command_queue_arc: Arc<Mutex<VecDeque<InternalNVMeCommandType>>>,
-            internal_completion_queue_arc: Arc<Mutex<VecDeque<NvmeCompletion>>>,
             base_dma: ThreadSafeDmaHandle,
-            running_signal: Arc<AtomicBool>
+            running_signal: Arc<AtomicBool>,
+            qp_arc: Arc<Mutex<Option<SendableIbvQp>>>,
+            capsule_context_arc: Arc<Mutex<Option<CapsuleContext>>>,
+            buffer_l_key: u32
         ) -> Result<i32, RdmaTransportError> {
+            let mut c_id_to_offset_map: Vec<Option<usize>> = vec![None; QUEUE_LENGTH];
             let mut any_inflight_wr = {
                 let internal_command_queue = internal_command_queue_arc.lock().unwrap();
-                let internal_completion_queue = internal_completion_queue_arc.lock().unwrap();
-                !internal_command_queue.is_empty() || !internal_completion_queue.is_empty()
+                !internal_command_queue.is_empty()
             };
 
             while running_signal.load(Ordering::SeqCst) || any_inflight_wr {
                 while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
-                    {
-                        let mut internal_completion_queue = internal_completion_queue_arc.lock().unwrap();
-                        debug_println!("[NVMe Device] I/O is completed. cid = {}, status = {}", completion.c_id as u16, completion.status as u16);
-                        internal_completion_queue.push_back(completion);
+                    debug_println!("[NVMe Device] I/O is completed. cid = {}, status = {}", completion.c_id as u16, completion.status as u16);
+                    let wr_id = completion.c_id & 0x7FF;
+
+                    let (opcode, virtual_addr, r_key, data_len, resp_sge) = {
+                        let mut capsule_ctx = capsule_context_arc.lock().unwrap();
+                        assert!(capsule_ctx.is_some());
+                        let (cmd, lba, virtual_addr, data_len, r_key) = capsule_ctx.as_mut().unwrap().get_request_capsule_content(wr_id as usize).unwrap();
+                        let resp_sge = capsule_ctx.as_mut().unwrap().get_resp_sge(wr_id as usize).unwrap();
+                        (cmd.opcode.clone(), virtual_addr, r_key, data_len, resp_sge)
+                    };
+
+                    match opcode {
+                        1 => { // NVMe write is completed -> send response
+                            debug_println_verbose!("Found NVMe device write I/O completion ....");
+                            {
+                                let mut capsule_ctx = capsule_context_arc.lock().unwrap();
+                                let mut capsule = capsule_ctx.as_mut().unwrap().get_resp_capsule(wr_id as usize).unwrap();
+                                capsule.status = completion.status as i16;
+                                capsule.cmd_id = wr_id;
+                            }
+
+                            let mut qp = qp_arc.lock().unwrap().as_mut().unwrap().as_ptr();
+                            post_send_response_work(
+                                wr_id,
+                                qp,
+                                resp_sge,
+                            ).unwrap();
+                        },
+                        2 => { // NVMe read is completed -> post RDMA remote write
+                            let offset = c_id_to_offset_map[wr_id as usize].unwrap();
+                            let mut qp = qp_arc.lock().unwrap().as_mut().unwrap().as_ptr();
+
+                            post_rmt_work (
+                                wr_id,
+                                qp,
+                                unsafe { base_dma.virt.add(offset) },
+                                buffer_l_key,
+                                virtual_addr,
+                                r_key,
+                                data_len,
+                                rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_WRITE,
+                            ).unwrap();
+                            c_id_to_offset_map[wr_id as usize] = None;
+                        },
+                        _ => {}
                     }
                 }
 
                 {
                     let mut internal_command_queue = internal_command_queue_arc.lock().unwrap();
-                    while let Some((start_offset, lba, write, size)) = internal_command_queue.pop_front() {
+                    while let Some((c_id, start_offset, lba, write, size)) = internal_command_queue.pop_front() {
+                        c_id_to_offset_map[c_id as usize] = Some(start_offset);
+
                         unsafe {
                             debug_println!("[NVMe Device] Submit I/O {} command: bytes_offset: {}, lba: {}, size: {}", if write { "WRITE" } else { "READ" }, start_offset, lba, size);
-                            nvme_queue_pair.submit_io(
+                            nvme_queue_pair.submit_io_with_cid(
                                 &base_dma.to_dma().slice(start_offset..start_offset + size),
                                 lba,
                                 write,
+                                c_id
                             );
                         }
                     }
@@ -791,16 +813,8 @@ pub mod rdma_target {
 
                 any_inflight_wr = {
                     let internal_command_queue = internal_command_queue_arc.lock().unwrap();
-                    let internal_completion_queue = internal_completion_queue_arc.lock().unwrap();
-                    !internal_command_queue.is_empty() || !internal_completion_queue.is_empty()
+                    !internal_command_queue.is_empty()
                 };
-            }
-
-            while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
-                {
-                    let mut internal_completion_queue = internal_completion_queue_arc.lock().unwrap();
-                    internal_completion_queue.push_back(completion);
-                }
             }
 
             Ok(0)

@@ -152,49 +152,6 @@ pub mod rdma_work_manager {
             Ok(wr_id)
         }
 
-        pub fn post_send_response_work(
-            &self,
-            wr_id: u16,
-            qp: *mut rdma_binding::ibv_qp,
-            sge: *mut rdma_binding::ibv_sge,
-        ) -> Result<(), WorkManagerError> {
-            let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
-
-            let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
-                wr_id: wr_id as u64,
-                next: ptr::null_mut(),
-                sg_list: sge,
-                num_sge: 1,
-                opcode: rdma_binding::ibv_wr_opcode_IBV_WR_SEND,
-                send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
-                __bindgen_anon_1: unsafe { mem::zeroed() },
-                wr: unsafe { mem::zeroed() },
-                qp_type: unsafe { mem::zeroed() },
-                __bindgen_anon_2: unsafe { mem::zeroed() },
-            };
-
-            unsafe {
-                debug_println_verbose!(
-                    "post_send_response_work: call ibv_post_send_ex. wr_id: {}",
-                    wr_id
-                );
-                let ret = rdma_binding::ibv_post_send_ex(qp, &mut wr, &mut bad_client_send_wr);
-                if ret != 0 {
-                    return Err(WorkManagerError::OperationFailed(
-                        "Failed to post send response work".into(),
-                    ));
-                }
-                debug_println_verbose!(
-                    "[SUCCESS] post_send_response_work: call ibv_post_send_ex. wr_id: {}",
-                    wr_id
-                );
-            }
-
-            // self.request_for_notification(cq)?;
-
-            Ok(())
-        }
-
         pub fn post_send_request_work(
             &self,
             wr_id: u16,
@@ -231,71 +188,6 @@ pub mod rdma_work_manager {
                     "[SUCCESS] post_send_request_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
-            }
-
-            // self.request_for_notification(cq)?;
-
-            Ok(())
-        }
-
-        pub fn post_rmt_work(
-            &self,
-            wr_id: u16,
-            qp: *mut rdma_binding::ibv_qp,
-            buffer_virtual_addr: *mut u8,
-            local_buffer_lkey: u32,
-            remote_addr: u64,
-            remote_rkey: u32,
-            data_len: u32,
-            mode: rdma_binding::ibv_wr_opcode,
-        ) -> Result<(), WorkManagerError> {
-            let mut local_sge = rdma_binding::ibv_sge {
-                addr: buffer_virtual_addr as u64,
-                length: data_len,
-                lkey: local_buffer_lkey,
-            };
-
-            let mut remote_wr = rdma_binding::ibv_send_wr {
-                wr_id: wr_id as u64,
-                next: ptr::null_mut(),
-                sg_list: &mut local_sge,
-                num_sge: 1,
-                opcode: mode,
-                send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
-                __bindgen_anon_1: unsafe { mem::zeroed() },
-                wr: rdma_binding::ibv_send_wr__bindgen_ty_2 {
-                    rdma: rdma_binding::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
-                        remote_addr,
-                        rkey: remote_rkey,
-                    },
-                },
-                qp_type: unsafe { mem::zeroed() },
-                __bindgen_anon_2: unsafe { mem::zeroed() },
-            };
-
-            let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
-            unsafe {
-                // let mode_str = CStr::from_ptr(rdma_binding::ibv_wr_opcode_str(mode))
-                //     .to_string_lossy() // converts to Cow<str>, handles invalid UTF-8 safely
-                //     .into_owned();
-                // debug_println_verbose!("post_rmt_work: call ibv_post_send_ex. wr_id: {}, mode: {}. local_addr: {}, local_lkey: {}, remote_addr: {}, data_len: {}, remote_rkey: {}"
-                //     , wr_id, mode_str, local_buffer_ptr as u64, local_buffer_lkey, remote_addr, data_len, remote_rkey);
-                let ret =
-                    rdma_binding::ibv_post_send_ex(qp, &mut remote_wr, &mut bad_client_send_wr);
-                if ret != 0 {
-                    return Err(WorkManagerError::OperationFailed(format!(
-                        "ibv_post_send_ex failed with error code: {}",
-                        ret
-                    )));
-                }
-                // let mode_str = CStr::from_ptr(rdma_binding::ibv_wr_opcode_str(mode))
-                //     .to_string_lossy() // converts to Cow<str>, handles invalid UTF-8 safely
-                //     .into_owned();
-                // debug_println_verbose!(
-                //     "[SUCCESS] post_rmt_work: call ibv_post_send_ex. wr_id: {}, mode: {}",
-                //     wr_id,
-                //     mode_str
-                // );
             }
 
             // self.request_for_notification(cq)?;
@@ -452,5 +344,98 @@ pub mod rdma_work_manager {
         pub fn any_inflight_wr(&self) -> bool {
             self.wr_id_allocator.any_inflight_wr()
         }
+    }
+
+    pub fn post_send_response_work(
+        wr_id: u16,
+        qp: *mut rdma_binding::ibv_qp,
+        sge: *mut rdma_binding::ibv_sge,
+    ) -> Result<(), WorkManagerError> {
+        let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
+
+        let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
+            wr_id: wr_id as u64,
+            next: ptr::null_mut(),
+            sg_list: sge,
+            num_sge: 1,
+            opcode: rdma_binding::ibv_wr_opcode_IBV_WR_SEND,
+            send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
+            __bindgen_anon_1: unsafe { mem::zeroed() },
+            wr: unsafe { mem::zeroed() },
+            qp_type: unsafe { mem::zeroed() },
+            __bindgen_anon_2: unsafe { mem::zeroed() },
+        };
+
+        unsafe {
+            debug_println_verbose!(
+                    "post_send_response_work: call ibv_post_send_ex. wr_id: {}",
+                    wr_id
+                );
+            let ret = rdma_binding::ibv_post_send_ex(qp, &mut wr, &mut bad_client_send_wr);
+            if ret != 0 {
+                return Err(WorkManagerError::OperationFailed(
+                    "Failed to post send response work".into(),
+                ));
+            }
+            debug_println_verbose!(
+                    "[SUCCESS] post_send_response_work: call ibv_post_send_ex. wr_id: {}",
+                    wr_id
+                );
+        }
+
+        // self.request_for_notification(cq)?;
+
+        Ok(())
+    }
+
+    pub fn post_rmt_work(
+        wr_id: u16,
+        qp: *mut rdma_binding::ibv_qp,
+        buffer_virtual_addr: *mut u8,
+        local_buffer_lkey: u32,
+        remote_addr: u64,
+        remote_rkey: u32,
+        data_len: u32,
+        mode: rdma_binding::ibv_wr_opcode,
+    ) -> Result<(), WorkManagerError> {
+        let mut local_sge = rdma_binding::ibv_sge {
+            addr: buffer_virtual_addr as u64,
+            length: data_len,
+            lkey: local_buffer_lkey,
+        };
+
+        let mut remote_wr = rdma_binding::ibv_send_wr {
+            wr_id: wr_id as u64,
+            next: ptr::null_mut(),
+            sg_list: &mut local_sge,
+            num_sge: 1,
+            opcode: mode,
+            send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
+            __bindgen_anon_1: unsafe { mem::zeroed() },
+            wr: rdma_binding::ibv_send_wr__bindgen_ty_2 {
+                rdma: rdma_binding::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
+                    remote_addr,
+                    rkey: remote_rkey,
+                },
+            },
+            qp_type: unsafe { mem::zeroed() },
+            __bindgen_anon_2: unsafe { mem::zeroed() },
+        };
+
+        let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
+        unsafe {
+            let ret =
+                rdma_binding::ibv_post_send_ex(qp, &mut remote_wr, &mut bad_client_send_wr);
+            if ret != 0 {
+                return Err(WorkManagerError::OperationFailed(format!(
+                    "ibv_post_send_ex failed with error code: {}",
+                    ret
+                )));
+            }
+        }
+
+        // self.request_for_notification(cq)?;
+
+        Ok(())
     }
 }

@@ -37,7 +37,7 @@ impl BufferManager {
         let mut free_idx_list = Vec::with_capacity(block_count as usize);
         let buffer: Dma<u8> = Dma::allocate(total_bytes).unwrap();
         let thread_safe_dma = ThreadSafeDmaHandle::from(&buffer);
-        for i in 0..block_count { free_idx_list.push(i); }
+        for i in (0..block_count).rev() { free_idx_list.push(i); }
         debug_println_verbose!("[buffer manager] total_bytes = {} block_size_bytes = {} block count = {}", total_bytes, block_size_bytes, block_count);
         Ok(BufferManager {
             total_size: total_bytes,
@@ -87,10 +87,10 @@ impl BufferManager {
     }
 
     pub fn allocate(&mut self) -> Option<(BufferManagerIdx, *mut rdma_binding::ibv_mr)> {
-        debug_println_verbose!("[Buffer manager] self.mr.is_some(): {}", self.mr.is_some());
         assert!(self.mr.is_some(), "RDMA MR is not registered yet");
 
         if let Some(idx) = self.free_idx_list.pop() {
+            debug_println_verbose!("[Buffer manager] block {} is allocated", idx);
             Some((idx, self.mr.unwrap()))
         } else {
             debug_println_verbose!("Failed to pop free_idx_list");
@@ -105,6 +105,14 @@ impl BufferManager {
 
     pub fn get_base_dma(&mut self) -> ThreadSafeDmaHandle {
         self.buffer
+    }
+
+    pub unsafe fn get_lkey(&mut self) -> Option<u32> {
+        if let Some(mr) = self.mr {
+            Some((*mr).lkey)
+        } else {
+            None
+        }
     }
 }
 

@@ -5,6 +5,7 @@ pub mod capsule {
     use std::error::Error;
     use std::os::raw::{c_int, c_void};
     use std::{fmt, mem, ptr};
+    use std::sync::{Arc, Mutex};
 
     #[derive(Debug)]
     pub enum RDMACapsuleError {
@@ -92,16 +93,16 @@ pub mod capsule {
     pub struct CapsuleContext {
         pub(crate) req_capsules: Vec<NVMeCapsule>,
         pub(crate) resp_capsules: Vec<NVMeResponseCapsule>,
-        // Unfortunately, we don't have direct control over the placement of
-        //  ibv_mr and ibv_sge objects.
         req_capsule_mrs: Vec<*mut rdma_binding::ibv_mr>,
         resp_capsule_mrs: Vec<*mut rdma_binding::ibv_mr>,
         req_capsule_sges: Vec<rdma_binding::ibv_sge>,
         resp_capsule_sges: Vec<rdma_binding::ibv_sge>,
     }
+    unsafe impl Send for CapsuleContext {}
+    unsafe impl Sync for CapsuleContext {}
 
     impl CapsuleContext {
-        pub fn new(pd: *mut ibv_pd, n: u16) -> Result<Box<Self>, RDMACapsuleError> {
+        pub fn new(pd: *mut ibv_pd, n: u16) -> Result<Self, RDMACapsuleError> {
             let mut req_capsules = vec![NVMeCapsule::zeroed(); n as usize];
             let mut req_capsule_mrs = vec![ptr::null_mut(); n as usize];
             let mut req_capsule_sges = unsafe { vec![mem::zeroed(); n as usize] };
@@ -147,14 +148,14 @@ pub mod capsule {
                 };
             }
 
-            Ok(Box::new(Self {
+            Ok(Self {
                 req_capsules,
                 resp_capsules,
                 req_capsule_mrs,
                 resp_capsule_mrs,
                 req_capsule_sges,
                 resp_capsule_sges,
-            }))
+            })
         }
 
         pub fn get_req_sge(
@@ -181,8 +182,16 @@ pub mod capsule {
             ))
         }
 
+        pub fn get_resp_capsule(
+            &mut self,
+            idx: usize,
+        ) -> Result<&mut NVMeResponseCapsule, RDMACapsuleError> {
+            Ok(self.resp_capsules.get_mut(idx).unwrap())
+        }
+
         pub fn get_request_capsule_content(&mut self, idx: usize) -> Result<(NvmeCommand, u64, u64, u32, u32), RDMACapsuleError> {
-            let capsule = self.req_capsules.get_mut(idx).unwrap();
+            debug_println_verbose!("[CAPSULE] get_request_capsule_content: idx = {}", idx);
+            let capsule = self.req_capsules.as_mut_slice().get_mut(idx).unwrap();
             Ok((
                 capsule.cmd.clone(),
                 capsule.lba.clone(),
