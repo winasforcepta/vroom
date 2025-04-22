@@ -92,12 +92,10 @@ pub mod rdma_work_manager {
             &mut self,
             wr_id: u16,
             qp: *mut rdma_binding::ibv_qp,
-            cq: *mut rdma_binding::ibv_cq,
-            req_capsule_ctx: *mut RequestCapsuleContext,
+            sge: *mut rdma_binding::ibv_sge,
         ) -> Result<u16, WorkManagerError> {
             let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
             self.ring_buffer.insert(wr_id);
-            let sge = unsafe { (*req_capsule_ctx).get_resp_sge(wr_id as usize).unwrap() };
             assert!(!sge.is_null());
 
             let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
@@ -126,12 +124,10 @@ pub mod rdma_work_manager {
             &mut self,
             wr_id: u16,
             qp: *mut rdma_binding::ibv_qp,
-            cq: *mut rdma_binding::ibv_cq,
-            req_capsule_ctx: *mut RequestCapsuleContext,
+            sge: *mut rdma_binding::ibv_sge,
         ) -> Result<u16, WorkManagerError> {
             let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
             self.ring_buffer.insert(wr_id);
-            let sge = unsafe { (*req_capsule_ctx).get_req_sge(wr_id as usize).unwrap() };
             assert!(!sge.is_null());
 
             let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
@@ -202,17 +198,9 @@ pub mod rdma_work_manager {
             &self,
             wr_id: u16,
             qp: *mut rdma_binding::ibv_qp,
-            req_capsule_ctx: *mut RequestCapsuleContext,
+            sge: *mut rdma_binding::ibv_sge,
         ) -> Result<(), WorkManagerError> {
             let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
-            let sge = unsafe {
-                (*req_capsule_ctx)
-                    .get_req_sge(wr_id as usize)
-                    .map_err(|_| {
-                        WorkManagerError::OperationFailed("failed to fetch request SGE".into())
-                    })?
-            };
-
             let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
                 wr_id: wr_id as u64,
                 next: ptr::null_mut(),

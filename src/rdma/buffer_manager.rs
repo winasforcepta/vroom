@@ -1,6 +1,6 @@
 use crate::rdma::rdma_common::rdma_binding;
 use crate::rdma::rdma_common::rdma_common::RdmaTransportError;
-use crate::memory::{Dma, DmaChunks, DmaSlice};
+use crate::memory::{virt_to_phys, Dma, DmaBufferLike, DmaChunks, DmaSlice};
 use libc::{
     mmap, munmap, size_t, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_SHARED,
     PROT_READ, PROT_WRITE,
@@ -12,17 +12,13 @@ use std::{io, ptr, ops::Range};
 #[derive(Clone, Copy)]
 pub struct RdmaBufferBlock {
     pub ptr: *mut u8,         // Virtual address of block
+    pub phys: usize,          // physical address
     pub len: usize,           // Block size
     pub base_dma_addr: u64,   // MR base DMA address
     pub base_ptr: *mut u8,    // MR base virtual address
 }
 
 impl RdmaBufferBlock {
-    pub fn dma_address(&self) -> u64 {
-        let offset = self.ptr as usize - self.base_ptr as usize;
-        self.base_dma_addr + offset as u64
-    }
-
     pub fn as_ptr(&self) -> *mut u8 {
         self.ptr
     }
@@ -56,7 +52,7 @@ impl DmaSlice for RdmaBufferAdapter {
 impl From<RdmaBufferBlock> for RdmaBufferAdapter {
     fn from(block: RdmaBufferBlock) -> Self {
         Self {
-            dma: Dma::from_raw_parts(block.ptr, block.dma_address() as usize, block.len),
+            dma: Dma::from_raw_parts(block.ptr, block.phys, block.len),
         }
     }
 }
@@ -126,6 +122,7 @@ impl BufferManager {
 
                 free_list.push(RdmaBufferBlock {
                     ptr: block_ptr,
+                    phys: virt_to_phys(block_ptr as usize).unwrap(),
                     len: block_size_bytes,
                     base_dma_addr: 0, // set after MR registration
                     base_ptr,
@@ -199,3 +196,32 @@ impl Drop for BufferManager {
 /// We don't do any unsafe operation on the base_ptr
 unsafe impl Send for BufferManager {}
 unsafe impl Sync for BufferManager {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ThreadSafeDmaHandle {
+    pub virt: *mut u8,
+    pub phys: usize,
+    pub size: usize,
+}
+
+impl From<&Dma<u8>> for ThreadSafeDmaHandle {
+    fn from(dma: &Dma<u8>) -> Self {
+        debug_println_verbose!("[DEBUG TRANSFORM DMA -> ThreadSafeDmaHandle] virt: {}, phy: {}, size: {}", dma.virt as u64, dma.phys as u64, dma.size);
+        ThreadSafeDmaHandle {
+            virt: dma.virt,
+            phys: dma.phys,
+            size: dma.size,
+        }
+    }
+}
+
+impl ThreadSafeDmaHandle {
+    pub unsafe fn to_dma(&self) -> Dma<u8> {
+        debug_println_verbose!("[DEBUG TRANSFORM ThreadSafeDmaHandle -> DMA] virt: {}, phy: {}, size: {}", self.virt as u64, self.phys as u64, self.size);
+        Dma::from_raw_parts(self.virt, self.phys, self.size)
+    }
+}
+
+// SAFETY: You ensure externally that the memory is synchronized or immutable
+unsafe impl Send for ThreadSafeDmaHandle {}
+unsafe impl Sync for ThreadSafeDmaHandle {}

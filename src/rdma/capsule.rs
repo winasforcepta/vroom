@@ -181,5 +181,16 @@ pub mod capsule {
                 self.resp_capsules.get_mut(idx).unwrap(),
             ))
         }
+
+        pub fn get_request_capsule_content(&mut self, idx: usize) -> Result<(NvmeCommand, u64, u64, u32, u32), RDMACapsuleError> {
+            let capsule = self.req_capsules.get_mut(idx).unwrap();
+            Ok((
+                capsule.cmd.clone(),
+                capsule.lba.clone(),
+                capsule.data_mr_address.clone(),
+                capsule.data_mr_length.clone(),
+                capsule.data_mr_r_key.clone()
+            ))
+        }
     }
 }

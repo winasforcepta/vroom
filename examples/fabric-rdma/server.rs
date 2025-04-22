@@ -45,7 +45,7 @@ fn main() {
         }
     };
 
-    let mut target = RdmaTarget::new(ipv4, read, write, reserved_bytes, block_size, &pci_addr).expect("Failed to create RDMA target");
+    let mut target = RdmaTarget::new(ipv4, reserved_bytes, block_size, &pci_addr).expect("Failed to create RDMA target");
     println!("Server is listening");
     target.run().expect("Fails to start RDMA target.");
 }

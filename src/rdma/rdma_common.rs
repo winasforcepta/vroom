@@ -1,12 +1,6 @@
 #[allow(unused)]
 pub mod rdma_binding {
-    #[allow(
-        non_camel_case_types,
-        non_snake_case,
-        non_upper_case_globals,
-        unused,
-        dead_code
-    )]
+    #[allow(warnings)]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 pub mod rdma_common {
@@ -151,7 +145,7 @@ pub mod rdma_common {
         pub(crate) pd: *mut rdma_binding::ibv_pd,
         pub(crate) io_comp_channel: *mut rdma_binding::ibv_comp_channel,
         pub(crate) cq: *mut rdma_binding::ibv_cq,
-        pub(crate) req_capsule_ctx: Box<RequestCapsuleContext>,
+        pub(crate) capsule_ctx: Box<RequestCapsuleContext>,
         remote_buffers: Vec<Option<RdmaBufferBlock>>,
         buffer_mr: *mut rdma_binding::ibv_mr,
     }
@@ -228,7 +222,7 @@ pub mod rdma_common {
                 pd: pd_ptr,
                 io_comp_channel,
                 cq,
-                req_capsule_ctx,
+                capsule_ctx: req_capsule_ctx,
                 remote_buffers: std::iter::repeat_with(|| None)
                     .take(max_wr as usize)
                     .collect(),

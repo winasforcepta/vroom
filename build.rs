@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 
 fn main() {
@@ -10,12 +11,10 @@ fn main() {
 
     // Generate the Rust bindings
     let bindings = bindgen::Builder::default()
-        // Headers
         .header("c-wrapper/librdma-wrapper.h")
         .header("/usr/include/infiniband/verbs.h")
         .header("/usr/include/rdma/rdma_cma.h")
         .clang_arg("-I/usr/include")
-        // Allowlist types (enums and structs)
         .allowlist_type("ibv_access_flags")
         .allowlist_type("ibv_send_flags")
         .allowlist_type("rdma_cm_event_type")
@@ -42,11 +41,9 @@ fn main() {
         .allowlist_type("sockaddr")
         .allowlist_type("sockaddr_in")
         .allowlist_type("in_addr")
-        // Constify enums to get top-level constants
         .constified_enum("ibv_access_flags")
         .constified_enum("ibv_send_flags")
         .constified_enum("rdma_cm_event_type")
-        // Allowlist functions
         .allowlist_function("ibv_ack_cq_events")
         .allowlist_function("ibv_alloc_pd")
         .allowlist_function("ibv_create_comp_channel")
@@ -83,24 +80,36 @@ fn main() {
         .allowlist_function("rdma_listen")
         .allowlist_function("rdma_resolve_addr")
         .allowlist_function("rdma_resolve_route")
-        // Allowlist constants
         .allowlist_var("AF_INET")
         .allowlist_var("RDMA_PS_TCP")
         .allowlist_var("UINT8_MAX")
-        // Cargo callbacks
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        // Generate the bindings
         .generate()
         .expect("Unable to generate bindings");
 
-    // Write the bindings to the file
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let bindings_file = out_dir.join("bindings.rs");
-    bindings
-        .write_to_file(&bindings_file)
-        .expect("Couldn't write bindings!");
 
-    // Link the required libraries
+    // Prepend #[allow(warnings)] to each item
+    let generated = bindings.to_string();
+    let mut output = String::new();
+
+    for line in generated.lines() {
+        // Add allow before items
+        if line.starts_with("pub ")
+            || line.starts_with("#[repr")
+            || line.starts_with("extern ")
+            || line.starts_with("impl ")
+            || line.starts_with("unsafe impl")
+        {
+            output.push_str("#[allow(warnings)]\n");
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
+
+    fs::write(&bindings_file, output).expect("Couldn't write bindings!");
+
     println!("cargo:rustc-link-lib=ibverbs");
     println!("cargo:rustc-link-lib=rdmacm");
     println!("cargo:rustc-link-lib=static=ibverbs_wrappers");

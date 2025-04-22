@@ -25,9 +25,6 @@ clap = { version = "4.4", features = ["derive"] }
 bindgen = "0.71.1"
 cc = "1.2.17"
 
-[profile.release]
-debug = true
-
 [package.metadata.rust-analyzer]
 check-cfg = ["cfg(debug_mode_verbose)"]
 [lints.rust]

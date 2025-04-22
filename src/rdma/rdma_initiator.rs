@@ -267,7 +267,7 @@ pub mod rdma_initiator {
             let rkey = self.ctx.get_local_buffer_rkey();
 
             {
-                let capsule = &mut self.ctx.req_capsule_ctx.req_capsules[wr_id as usize];
+                let capsule = &mut self.ctx.capsule_ctx.req_capsules[wr_id as usize];
                 capsule.lba = nvme_addr;
                 capsule.cmd.c_id = nvme_cid;
                 capsule.cmd.opcode = 1;
@@ -275,10 +275,11 @@ pub mod rdma_initiator {
                 capsule.data_mr_r_key = rkey;
                 capsule.data_mr_length = data_len;
             }
+
             debug_println!(
                 "[capsule data] nvme_add={} data_addr={} data_rkey={}, len={}",
                 nvme_addr,
-                local_buffer.get() as u64,
+                local_buffer.base_ptr as u64,
                 rkey,
                 data_len
             );
@@ -287,17 +288,22 @@ pub mod rdma_initiator {
             self.ctx
                 .set_memory_block(wr_id as usize, local_buffer);
             let qp = unsafe { (*self.ctx.cm_id).qp };
-            let cq = self.ctx.cq;
-            let req_capsule_ctx = self.ctx.req_capsule_ctx.as_mut() as *mut RequestCapsuleContext;
+
             // First post the rcv work to prepare for response
+            let resp_sge = self.ctx.capsule_ctx.get_resp_sge(wr_id as usize).unwrap();
             self.rwm
-                .post_send_request_work(wr_id, qp, req_capsule_ctx)
+                .post_rcv_resp_work(wr_id, qp, resp_sge)
+                .unwrap();
+
+            // Then send the request
+            let req_sge = self.ctx.capsule_ctx.get_req_sge(wr_id as usize).unwrap();
+            self.rwm
+                .post_send_request_work(wr_id, qp, req_sge)
                 .map_err(|_| {
                     RdmaTransportError::OpFailed("failed to post send request WR".into())
                 })?;
-            self.rwm
-                .post_rcv_resp_work(wr_id, qp, cq, req_capsule_ctx)
-                .unwrap();
+
+
 
             Ok(0)
         }
@@ -313,7 +319,7 @@ pub mod rdma_initiator {
             let rkey = self.ctx.get_local_buffer_rkey();
 
             {
-                let capsule = &mut self.ctx.req_capsule_ctx.req_capsules[wr_id as usize];
+                let capsule = &mut self.ctx.capsule_ctx.req_capsules[wr_id as usize];
                 capsule.lba = nvme_addr;
                 capsule.cmd.c_id = nvme_cid;
                 capsule.cmd.opcode = 1;
@@ -325,7 +331,7 @@ pub mod rdma_initiator {
             debug_println!(
                 "[capsule data] nvme_add={} data_addr={} data_rkey={}, len={}",
                 nvme_addr,
-                local_buffer.get() as u64,
+                local_buffer.base_ptr as u64,
                 rkey,
                 data_len
             );
@@ -334,14 +340,15 @@ pub mod rdma_initiator {
             self.ctx
                 .set_memory_block(wr_id as usize, local_buffer);
             let qp = unsafe { (*self.ctx.cm_id).qp };
-            let cq = self.ctx.cq;
-            let req_capsule_ctx = self.ctx.req_capsule_ctx.as_mut() as *mut RequestCapsuleContext;
+            let req_capsule_ctx = self.ctx.capsule_ctx.as_mut() as *mut RequestCapsuleContext;
             // First post the rcv work to prepare for response
+            let resp_sge = self.ctx.capsule_ctx.get_resp_sge(wr_id as usize).unwrap();
             self.rwm
-                .post_rcv_resp_work(wr_id, qp, cq, req_capsule_ctx)
+                .post_rcv_resp_work(wr_id, qp, resp_sge)
                 .unwrap();
+            let req_sge = self.ctx.capsule_ctx.get_req_sge(wr_id as usize).unwrap();
             self.rwm
-                .post_send_request_work(wr_id, qp, req_capsule_ctx)
+                .post_send_request_work(wr_id, qp, req_sge)
                 .map_err(|_| {
                     RdmaTransportError::OpFailed("failed to post send request WR".into())
                 })?;
