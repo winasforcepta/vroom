@@ -89,10 +89,9 @@ pub mod capsule {
         }
     }
 
-    pub struct RequestCapsuleContext {
+    pub struct CapsuleContext {
         pub(crate) req_capsules: Vec<NVMeCapsule>,
         pub(crate) resp_capsules: Vec<NVMeResponseCapsule>,
-
         // Unfortunately, we don't have direct control over the placement of
         //  ibv_mr and ibv_sge objects.
         req_capsule_mrs: Vec<*mut rdma_binding::ibv_mr>,
@@ -101,7 +100,7 @@ pub mod capsule {
         resp_capsule_sges: Vec<rdma_binding::ibv_sge>,
     }
 
-    impl RequestCapsuleContext {
+    impl CapsuleContext {
         pub fn new(pd: *mut ibv_pd, n: u16) -> Result<Box<Self>, RDMACapsuleError> {
             let mut req_capsules = vec![NVMeCapsule::zeroed(); n as usize];
             let mut req_capsule_mrs = vec![ptr::null_mut(); n as usize];

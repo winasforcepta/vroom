@@ -1,8 +1,9 @@
+use std::alloc::{alloc, Layout};
 use clap::Parser;
 use std::net::IpAddr;
-use std::thread;
+use std::{ptr, thread};
 use std::time::Duration;
-use vroom::debug_println;
+use vroom::{debug_println, HUGE_PAGE_SIZE};
 use vroom::rdma::buffer_manager::BufferManager;
 use vroom::rdma::rdma_initiator::rdma_initiator::RdmaInitiator;
 
@@ -33,7 +34,7 @@ fn main() {
         }
     };
 
-    let mut buffer_manager = BufferManager::new(2_147_483_648usize / 4, 512usize).unwrap();
+    let mut buffer_manager = BufferManager::new(HUGE_PAGE_SIZE, 512usize).unwrap();
     let mut transport = RdmaInitiator::connect(ipv4, 4421, &mut buffer_manager)
         .expect("failed to connect to server and create transport.");
     thread::sleep(Duration::from_secs(1));
@@ -45,13 +46,20 @@ fn main() {
     let mut cid = 0u16;
     let nvme_addr = 0u64;
     let mut outstanding_requests = 0usize;
+    let layout = Layout::from_size_align(512usize, 1).unwrap();
+    let ptr: *mut u8 = unsafe { alloc(layout) };
 
-    let mut write_buffer = buffer_manager.allocate().unwrap();
-    let mut read_buffer_ctx = buffer_manager.allocate().unwrap();
+    if ptr == ptr::null_mut() {
+        panic!("Failed to allocate memory");
+    }
+
+    let (buffer_idx, mr) = buffer_manager.allocate().unwrap();
+    let (buffer, _, _, _) = buffer_manager.get_memory_info(buffer_idx);
+    let rkey = unsafe { (*mr).rkey };
 
     for _i in 0..n_write {
         transport
-            .post_remote_io_write(cid, nvme_addr, &mut write_buffer, 512u32)
+            .post_remote_io_write(cid, nvme_addr, buffer, 512u32, rkey)
             .expect("failed to post remote_io_write");
         cid = cid + 1;
         outstanding_requests = outstanding_requests + 1;
@@ -59,7 +67,7 @@ fn main() {
 
     for _i in 0..n_read {
         transport
-            .post_remote_io_read(cid, nvme_addr, &mut read_buffer_ctx, 512u32)
+            .post_remote_io_read(cid, nvme_addr, buffer, 512u32, rkey)
             .expect("failed to post remote_io_read");
         cid = cid + 1;
         outstanding_requests = outstanding_requests + 1;

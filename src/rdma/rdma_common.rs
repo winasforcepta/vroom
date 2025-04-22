@@ -4,8 +4,8 @@ pub mod rdma_binding {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 pub mod rdma_common {
-    use crate::rdma::buffer_manager::{RdmaBufferBlock};
-    use crate::rdma::capsule::capsule::RequestCapsuleContext;
+    use crate::rdma::buffer_manager::{BufferManagerIdx};
+    use crate::rdma::capsule::capsule::CapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
     use std::any::Any;
     use std::net::Ipv4Addr;
@@ -145,16 +145,14 @@ pub mod rdma_common {
         pub(crate) pd: *mut rdma_binding::ibv_pd,
         pub(crate) io_comp_channel: *mut rdma_binding::ibv_comp_channel,
         pub(crate) cq: *mut rdma_binding::ibv_cq,
-        pub(crate) capsule_ctx: Box<RequestCapsuleContext>,
-        remote_buffers: Vec<Option<RdmaBufferBlock>>,
-        buffer_mr: *mut rdma_binding::ibv_mr,
+        pub(crate) capsule_ctx: Box<CapsuleContext>,
+        wrid_to_buffer_idx: Vec<Option<BufferManagerIdx>>,
     }
 
     impl ClientRdmaContext {
         pub fn new(
             mut cm_id_ptr: *mut rdma_binding::rdma_cm_id,
             mut pd_ptr: *mut rdma_binding::ibv_pd,
-            buffer_manager_mr_ptr: *mut rdma_binding::ibv_mr,
             max_wr: u16,
         ) -> Result<Self, RdmaTransportError> {
             assert!(!cm_id_ptr.is_null(), "cm_id_ptr is null");
@@ -212,7 +210,7 @@ pub mod rdma_common {
                 }
             }
 
-            let req_capsule_ctx = RequestCapsuleContext::new(pd_ptr, max_wr).map_err(|_| {
+            let req_capsule_ctx = CapsuleContext::new(pd_ptr, max_wr).map_err(|_| {
                 RdmaTransportError::OpFailed("failed to construct IO request context".into())
             })?;
 
@@ -223,10 +221,9 @@ pub mod rdma_common {
                 io_comp_channel,
                 cq,
                 capsule_ctx: req_capsule_ctx,
-                remote_buffers: std::iter::repeat_with(|| None)
+                wrid_to_buffer_idx: std::iter::repeat_with(|| None)
                     .take(max_wr as usize)
                     .collect(),
-                buffer_mr: buffer_manager_mr_ptr,
             })
         }
 
@@ -243,45 +240,33 @@ pub mod rdma_common {
             }
         }
 
-        pub fn set_memory_block(&mut self, idx: usize, buffer_ptr: *mut RdmaBufferBlock) {
-            assert!(!buffer_ptr.is_null());
-            assert!(unsafe { !(*buffer_ptr).as_ptr().is_null() });
-            self.remote_buffers[idx] = Some(unsafe { *buffer_ptr });
+        pub fn set_wr_id_buffer_idx(&mut self, wr_id: usize, buffer_idx: BufferManagerIdx) {
+            self.wrid_to_buffer_idx[wr_id] = Some(buffer_idx);
         }
 
         pub fn get_remote_op_buffer(
             &self,
             idx: usize,
-        ) -> Result<RdmaBufferBlock, RdmaTransportError> {
-            assert!(self.remote_buffers[idx].is_some());
-            Ok(self.remote_buffers[idx].unwrap())
+        ) -> Result<BufferManagerIdx, RdmaTransportError> {
+            assert!(self.wrid_to_buffer_idx[idx].is_some());
+            Ok(self.wrid_to_buffer_idx[idx].unwrap())
         }
 
         pub fn free_remote_op_buffer(
             &mut self,
             idx: usize,
         ) -> Result<(), RdmaTransportError> {
-            assert!(self.remote_buffers[idx].is_some());
-            let ret = self.remote_buffers[idx].unwrap();
-            self.remote_buffers[idx] = None;
+            assert!(self.wrid_to_buffer_idx[idx].is_some());
+            self.wrid_to_buffer_idx[idx] = None;
             Ok(())
-        }
-
-        pub fn get_local_buffer_lkey(&self) -> u32 {
-            assert!(!self.buffer_mr.is_null());
-            unsafe { (*self.buffer_mr).lkey.clone() }
-        }
-        pub fn get_local_buffer_rkey(&self) -> u32 {
-            assert!(!self.buffer_mr.is_null());
-            unsafe { (*self.buffer_mr).rkey.clone() }
         }
     }
 
     impl Drop for ClientRdmaContext {
         fn drop(&mut self) {
-            for i in 0..self.remote_buffers.len() {
-                if !self.remote_buffers[i].is_none() {
-                    self.remote_buffers[i] = None;
+            for i in 0..self.wrid_to_buffer_idx.len() {
+                if !self.wrid_to_buffer_idx[i].is_none() {
+                    self.wrid_to_buffer_idx[i] = None;
                 }
             }
 
@@ -342,16 +327,6 @@ pub mod rdma_common {
                     eprintln!("{}: ibv_destroy_comp_channel() failed.", self._name);
                 } else {
                     println!("io_comp_channel is successfully manually dropped.");
-                }
-            }
-
-            unsafe {
-                println!("Deregister MR.");
-                let rc = rdma_binding::ibv_dereg_mr(self.buffer_mr);
-                if rc != 0 {
-                    eprintln!("{}: ibv_dereg_mr() failed.", self._name)
-                } else {
-                    println!("MR is successfully manually dropped.");
                 }
             }
 

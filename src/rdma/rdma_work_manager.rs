@@ -1,5 +1,5 @@
 pub mod rdma_work_manager {
-    use crate::rdma::capsule::capsule::RequestCapsuleContext;
+    use crate::rdma::capsule::capsule::CapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
     use crate::rdma::ring_buffer::RingBuffer;
     use crate::debug_println_verbose;
@@ -7,6 +7,7 @@ pub mod rdma_work_manager {
     use std::collections::VecDeque;
     use std::error::Error;
     use std::{fmt, mem, ptr};
+    use crate::memory::{Dma, DmaSlice};
 
     #[derive(Debug)]
     pub enum WorkManagerError {
@@ -241,7 +242,7 @@ pub mod rdma_work_manager {
             &self,
             wr_id: u16,
             qp: *mut rdma_binding::ibv_qp,
-            local_buffer_ptr: *mut u8,
+            buffer_virtual_addr: *mut u8,
             local_buffer_lkey: u32,
             remote_addr: u64,
             remote_rkey: u32,
@@ -249,7 +250,7 @@ pub mod rdma_work_manager {
             mode: rdma_binding::ibv_wr_opcode,
         ) -> Result<(), WorkManagerError> {
             let mut local_sge = rdma_binding::ibv_sge {
-                addr: local_buffer_ptr as u64,
+                addr: buffer_virtual_addr as u64,
                 length: data_len,
                 lkey: local_buffer_lkey,
             };
