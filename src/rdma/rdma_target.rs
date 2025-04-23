@@ -746,7 +746,7 @@ pub mod rdma_target {
 
             while running_signal.load(Ordering::SeqCst) || any_inflight_wr {
                 while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
-                    debug_println!("[NVMe Device] I/O is completed. cid = {}, status = {}", completion.c_id as u16, completion.status as u16);
+                    debug_println!("[NVMe Device] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
                     let wr_id = completion.c_id & 0x7FF;
 
                     let (opcode, virtual_addr, r_key, data_len, resp_sge) = {
@@ -763,7 +763,7 @@ pub mod rdma_target {
                             {
                                 let mut capsule_ctx = capsule_context_arc.lock().unwrap();
                                 let mut capsule = capsule_ctx.as_mut().unwrap().get_resp_capsule(wr_id as usize).unwrap();
-                                capsule.status = completion.status as i16;
+                                capsule.status = (completion.status >> 1) as i16;
                                 capsule.cmd_id = wr_id;
                             }
 

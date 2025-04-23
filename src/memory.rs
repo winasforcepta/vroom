@@ -28,30 +28,10 @@ lazy_static! {
         Mutex::new(HashMap::new());
 }
 
-pub trait DmaBufferLike {
-    fn as_ptr(&self) -> *mut u8;
-    fn dma_address(&self) -> u64;
-    fn len(&self) -> usize;
-}
-
 pub struct Dma<T> {
     pub virt: *mut T,
     pub phys: usize,
     pub size: usize,
-}
-
-impl<T> DmaBufferLike for Dma<T> {
-    fn as_ptr(&self) -> *mut u8 {
-        self.virt as *mut u8
-    }
-
-    fn dma_address(&self) -> u64 {
-        self.phys as u64
-    }
-
-    fn len(&self) -> usize {
-        std::mem::size_of::<T>()
-    }
 }
 
 // should be safe
@@ -222,7 +202,7 @@ impl<T> Dma<T> {
                     )
                 };
                 if ptr == libc::MAP_FAILED {
-                    Err("failed to mmap huge page - are huge pages enabled and free?".into())
+                    Err(format!("failed to mmap huge page - are huge pages enabled and free?. last os error: {}",  io::Error::last_os_error()).into())
                 } else if unsafe { libc::mlock(ptr, size) } == 0 {
                     let memory = Dma {
                         // virt: NonNull::new(ptr as *mut T).expect("oops"),

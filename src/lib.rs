@@ -1,4 +1,6 @@
 #![cfg_attr(target_arch = "aarch64", feature(stdarch_arm_hints))]
+extern crate core;
+
 #[allow(unused)]
 mod cmd;
 #[allow(dead_code)]
