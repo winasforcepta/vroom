@@ -11,6 +11,7 @@ pub mod rdma_common {
     use std::net::Ipv4Addr;
     use std::os::raw::c_int;
     use std::{fmt, io, mem, ptr};
+    use std::cell::UnsafeCell;
     use crate::memory::Dma;
     use crate::QUEUE_LENGTH;
 
@@ -19,24 +20,24 @@ pub mod rdma_common {
     pub static MAX_WR: usize = QUEUE_LENGTH;
     pub static CQ_CAPACITY: usize = QUEUE_LENGTH;
 
-    pub struct SendableIbvQp {
-        ptr: ptr::NonNull<rdma_binding::ibv_qp>,
+    pub struct Sendable<T> {
+        ptr: ptr::NonNull<T>,
     }
 
-    impl SendableIbvQp {
-        pub unsafe fn new(ptr: *mut rdma_binding::ibv_qp) -> Self {
-            SendableIbvQp {
-                ptr: ptr::NonNull::new(ptr).expect("Pointer to ibv_qp must not be null"),
+    impl<T> Sendable<T> {
+        pub unsafe fn new(ptr: *mut T) -> Self {
+            Sendable {
+                ptr: ptr::NonNull::new(ptr).expect("Pointer must not be null"),
             }
         }
 
-        pub fn as_ptr(&self) -> *mut rdma_binding::ibv_qp {
+        pub fn as_ptr(&self) -> *mut T {
             self.ptr.as_ptr()
         }
     }
 
-    unsafe impl Send for SendableIbvQp {}
-    unsafe impl Sync for SendableIbvQp {}
+    unsafe impl<T> Send for Sendable<T> where T: Send {}
+    unsafe impl<T> Sync for Sendable<T> where T: Sync {}
 
     #[derive(Debug)]
     pub enum RdmaTransportError {
@@ -165,7 +166,7 @@ pub mod rdma_common {
         pub(crate) pd: *mut rdma_binding::ibv_pd,
         pub(crate) io_comp_channel: *mut rdma_binding::ibv_comp_channel,
         pub(crate) cq: *mut rdma_binding::ibv_cq,
-        wrid_to_buffer_idx: Vec<Option<BufferManagerIdx>>,
+        wrid_to_buffer_idx: UnsafeCell<Vec<Option<BufferManagerIdx>>>,
     }
 
     impl ClientRdmaContext {
@@ -239,10 +240,31 @@ pub mod rdma_common {
                 pd: pd_ptr,
                 io_comp_channel,
                 cq,
-                wrid_to_buffer_idx: std::iter::repeat_with(|| None)
+                wrid_to_buffer_idx: UnsafeCell::new(
+                    std::iter::repeat_with(|| None)
                     .take(max_wr as usize)
-                    .collect(),
+                    .collect()
+                ),
             })
+        }
+
+        pub fn get_sendable_qp(&self) -> Sendable<rdma_binding::ibv_qp> {
+            unsafe {
+                let raw_qp = (*self.cm_id).qp;
+                Sendable::new(raw_qp)
+            }
+        }
+
+        pub fn get_sendable_cq(&self) -> Sendable<rdma_binding::ibv_cq> {
+            unsafe {
+                Sendable::new(self.cq)
+            }
+        }
+
+        pub fn get_sendable_io_comp_channel(&self) -> Sendable<rdma_binding::ibv_comp_channel> {
+            unsafe {
+                Sendable::new(self.io_comp_channel)
+            }
         }
 
         fn _get_client_address(id: *mut rdma_binding::rdma_cm_id) -> String {
@@ -258,33 +280,44 @@ pub mod rdma_common {
             }
         }
 
-        pub fn set_wr_id_buffer_idx(&mut self, wr_id: usize, buffer_idx: BufferManagerIdx) {
-            self.wrid_to_buffer_idx[wr_id] = Some(buffer_idx);
+        pub fn set_wr_id_buffer_idx(&self, wr_id: usize, buffer_idx: BufferManagerIdx) {
+            unsafe {
+                (*self.wrid_to_buffer_idx.get())[wr_id] = Some(buffer_idx);
+            }
         }
 
         pub fn get_remote_op_buffer(
             &self,
             idx: usize,
         ) -> Result<BufferManagerIdx, RdmaTransportError> {
-            assert!(self.wrid_to_buffer_idx[idx].is_some());
-            Ok(self.wrid_to_buffer_idx[idx].unwrap())
+            unsafe {
+                assert!((*self.wrid_to_buffer_idx.get())[idx].is_some());
+                Ok((*self.wrid_to_buffer_idx.get())[idx].unwrap())
+            }
+
         }
 
         pub fn free_remote_op_buffer(
-            &mut self,
+            &self,
             idx: usize,
         ) -> Result<(), RdmaTransportError> {
-            assert!(self.wrid_to_buffer_idx[idx].is_some());
-            self.wrid_to_buffer_idx[idx] = None;
+            unsafe {
+                assert!((*self.wrid_to_buffer_idx.get())[idx].is_some());
+                (*self.wrid_to_buffer_idx.get())[idx] = None;
+            }
             Ok(())
         }
     }
 
     impl Drop for ClientRdmaContext {
         fn drop(&mut self) {
-            for i in 0..self.wrid_to_buffer_idx.len() {
-                if !self.wrid_to_buffer_idx[i].is_none() {
-                    self.wrid_to_buffer_idx[i] = None;
+            unsafe {
+                let len = (*self.wrid_to_buffer_idx.get()).len();
+
+                for i in 0..len {
+                    if !(*self.wrid_to_buffer_idx.get())[i].is_none() {
+                        (*self.wrid_to_buffer_idx.get())[i] = None;
+                    }
                 }
             }
 
@@ -372,4 +405,5 @@ pub mod rdma_common {
     }
 
     unsafe impl Send for ClientRdmaContext {} // Dangerous hack
+    unsafe impl Sync for ClientRdmaContext {} // Dangerous hack
 }

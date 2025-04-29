@@ -1,5 +1,4 @@
 pub mod rdma_work_manager {
-    use crate::rdma::capsule::capsule::CapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
     use crate::rdma::ring_buffer::RingBuffer;
     use crate::debug_println_verbose;
@@ -7,7 +6,7 @@ pub mod rdma_work_manager {
     use std::collections::VecDeque;
     use std::error::Error;
     use std::{fmt, mem, ptr};
-    use crate::memory::{Dma, DmaSlice};
+    use crate::rdma::rdma_common::rdma_common::Sendable;
 
     #[derive(Debug)]
     pub enum WorkManagerError {
@@ -92,23 +91,22 @@ pub mod rdma_work_manager {
         pub fn post_rcv_resp_work(
             &mut self,
             wr_id: u16,
-            qp: *mut rdma_binding::ibv_qp,
-            sge: *mut rdma_binding::ibv_sge,
+            qp: Sendable<rdma_binding::ibv_qp>,
+            mut sge: rdma_binding::ibv_sge,
         ) -> Result<u16, WorkManagerError> {
             let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
             self.ring_buffer.insert(wr_id);
-            assert!(!sge.is_null());
 
             let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
                 wr_id: wr_id as u64,
                 next: ptr::null_mut(),
-                sg_list: sge,
+                sg_list: &mut sge,
                 num_sge: 1,
             };
 
             unsafe {
                 debug_println_verbose!("post_rcv_resp_work: call ibv_post_recv_ex");
-                let ret = rdma_binding::ibv_post_recv_ex(qp, &mut wr, &mut bad_client_recv_wr);
+                let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
                 if ret != 0 {
                     return Err(WorkManagerError::OperationFailed(
                         "Failed to post rcv work".into(),
@@ -124,22 +122,21 @@ pub mod rdma_work_manager {
         pub fn post_rcv_req_work(
             &mut self,
             wr_id: u16,
-            qp: *mut rdma_binding::ibv_qp,
-            sge: *mut rdma_binding::ibv_sge,
+            qp: Sendable<rdma_binding::ibv_qp>,
+            mut sge: rdma_binding::ibv_sge,
         ) -> Result<u16, WorkManagerError> {
             let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
             self.ring_buffer.insert(wr_id);
-            assert!(!sge.is_null());
 
             let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
                 wr_id: wr_id as u64,
                 next: ptr::null_mut(),
-                sg_list: sge,
+                sg_list: &mut sge,
                 num_sge: 1,
             };
 
             unsafe {
-                let ret = rdma_binding::ibv_post_recv_ex(qp, &mut wr, &mut bad_client_recv_wr);
+                let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
                 if ret != 0 {
                     return Err(WorkManagerError::OperationFailed(
                         "Failed to post rcv work".into(),
@@ -155,14 +152,14 @@ pub mod rdma_work_manager {
         pub fn post_send_request_work(
             &self,
             wr_id: u16,
-            qp: *mut rdma_binding::ibv_qp,
-            sge: *mut rdma_binding::ibv_sge,
+            qp: Sendable<rdma_binding::ibv_qp>,
+            mut sge: rdma_binding::ibv_sge,
         ) -> Result<(), WorkManagerError> {
             let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
             let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
                 wr_id: wr_id as u64,
                 next: ptr::null_mut(),
-                sg_list: sge,
+                sg_list: &mut sge,
                 num_sge: 1,
                 opcode: rdma_binding::ibv_wr_opcode_IBV_WR_SEND,
                 send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
@@ -177,7 +174,7 @@ pub mod rdma_work_manager {
                     "post_send_request_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
-                let ret = rdma_binding::ibv_post_send_ex(qp, &mut wr, &mut bad_client_send_wr);
+                let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
                 if ret != 0 {
                     return Err(WorkManagerError::OperationFailed(format!(
                         "ibv_post_recv_ex failed with error code: {}",
@@ -214,11 +211,9 @@ pub mod rdma_work_manager {
 
         pub fn poll_completed_works(
             &mut self,
-            comp_channel: *mut rdma_binding::ibv_comp_channel,
-            cq: *mut rdma_binding::ibv_cq,
+            comp_channel: Sendable<rdma_binding::ibv_comp_channel>,
+            cq: Sendable<rdma_binding::ibv_cq>,
         ) -> Result<(), WorkManagerError> {
-            assert!(!comp_channel.is_null());
-            assert!(!cq.is_null());
             self.first_unprocessed_wc_index = 0;
             self.n_completed_work = 0;
 
@@ -228,7 +223,7 @@ pub mod rdma_work_manager {
                 let received_wc_ptr = self.received_wcs.as_mut_ptr();
                 assert!(self.received_wcs.len() >= MAX_COMPLETION_EVENT as usize);
                 let num_polled = rdma_binding::ibv_poll_cq_ex(
-                    cq,                            // the CQ, we got notification for
+                    cq.as_ptr(),                            // the CQ, we got notification for
                     MAX_COMPLETION_EVENT as c_int, // max 64 element
                     received_wc_ptr,
                 );
@@ -251,7 +246,7 @@ pub mod rdma_work_manager {
             }
 
             // then request for notification
-            self.request_for_notification(cq)?;
+            self.request_for_notification(cq.as_ptr())?;
 
             // Then, poll again to avoid race condition
             unsafe {
@@ -259,7 +254,7 @@ pub mod rdma_work_manager {
                 let received_wc_ptr = self.received_wcs.as_mut_ptr();
                 assert!(self.received_wcs.len() >= MAX_COMPLETION_EVENT as usize);
                 let num_polled = rdma_binding::ibv_poll_cq_ex(
-                    cq,                            // the CQ, we got notification for
+                    cq.as_ptr(),                            // the CQ, we got notification for
                     MAX_COMPLETION_EVENT as c_int, // max 64 element
                     received_wc_ptr,
                 );
@@ -286,7 +281,7 @@ pub mod rdma_work_manager {
                 debug_println_verbose!("poll_completed_works: calling ibv_get_cq_event");
                 let mut _cq: *mut rdma_binding::ibv_cq = ptr::null_mut(); // we don't care about the pointed CQ as there is only a single CQ
                 let mut cq_ctx: *mut std::ffi::c_void = ptr::null_mut();
-                rdma_binding::ibv_get_cq_event(comp_channel, &mut _cq, &mut cq_ctx);
+                rdma_binding::ibv_get_cq_event(comp_channel.as_ptr(), &mut _cq, &mut cq_ctx);
                 debug_println_verbose!("[SUCCESS] poll_completed_works: calling ibv_get_cq_event");
             }
 
@@ -296,7 +291,7 @@ pub mod rdma_work_manager {
                 let received_wc_ptr = self.received_wcs.as_mut_ptr();
                 assert!(self.received_wcs.len() >= MAX_COMPLETION_EVENT as usize);
                 let num_polled = rdma_binding::ibv_poll_cq_ex(
-                    cq,                            // the CQ, we got notification for
+                    cq.as_ptr(),                            // the CQ, we got notification for
                     MAX_COMPLETION_EVENT as c_int, // max 64 element
                     received_wc_ptr,
                 );
@@ -317,7 +312,7 @@ pub mod rdma_work_manager {
             // ack the completion
             unsafe {
                 debug_println_verbose!("poll_completed_works: calling ibv_ack_cq_events");
-                rdma_binding::ibv_ack_cq_events(cq, self.n_completed_work as c_uint);
+                rdma_binding::ibv_ack_cq_events(cq.as_ptr(), self.n_completed_work as c_uint);
                 debug_println_verbose!("[SUCCESS] poll_completed_works: calling ibv_ack_cq_events");
             }
 
@@ -348,15 +343,15 @@ pub mod rdma_work_manager {
 
     pub fn post_send_response_work(
         wr_id: u16,
-        qp: *mut rdma_binding::ibv_qp,
-        sge: *mut rdma_binding::ibv_sge,
+        qp: Sendable<rdma_binding::ibv_qp>,
+        mut sge: rdma_binding::ibv_sge,
     ) -> Result<(), WorkManagerError> {
         let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
 
         let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
             wr_id: wr_id as u64,
             next: ptr::null_mut(),
-            sg_list: sge,
+            sg_list: &mut sge,
             num_sge: 1,
             opcode: rdma_binding::ibv_wr_opcode_IBV_WR_SEND,
             send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
@@ -371,7 +366,7 @@ pub mod rdma_work_manager {
                     "post_send_response_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
-            let ret = rdma_binding::ibv_post_send_ex(qp, &mut wr, &mut bad_client_send_wr);
+            let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
             if ret != 0 {
                 return Err(WorkManagerError::OperationFailed(
                     "Failed to post send response work".into(),
@@ -388,9 +383,9 @@ pub mod rdma_work_manager {
         Ok(())
     }
 
-    pub fn post_rmt_work(
+    pub fn post_rmt_work_bak(
         wr_id: u16,
-        qp: *mut rdma_binding::ibv_qp,
+        qp: Sendable<rdma_binding::ibv_qp>,
         buffer_virtual_addr: *mut u8,
         local_buffer_lkey: u32,
         remote_addr: u64,
@@ -425,7 +420,50 @@ pub mod rdma_work_manager {
         let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
         unsafe {
             let ret =
-                rdma_binding::ibv_post_send_ex(qp, &mut remote_wr, &mut bad_client_send_wr);
+                rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut remote_wr, &mut bad_client_send_wr);
+            if ret != 0 {
+                return Err(WorkManagerError::OperationFailed(format!(
+                    "ibv_post_send_ex failed with error code: {}",
+                    ret
+                )));
+            }
+        }
+
+        // self.request_for_notification(cq)?;
+
+        Ok(())
+    }
+
+    pub fn post_rmt_work(
+        wr_id: u16,
+        qp: Sendable<rdma_binding::ibv_qp>,
+        mut sge: rdma_binding::ibv_sge,
+        remote_addr: u64,
+        remote_rkey: u32,
+        mode: rdma_binding::ibv_wr_opcode,
+    ) -> Result<(), WorkManagerError> {
+        let mut remote_wr = rdma_binding::ibv_send_wr {
+            wr_id: wr_id as u64,
+            next: ptr::null_mut(),
+            sg_list: &mut sge,
+            num_sge: 1,
+            opcode: mode,
+            send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
+            __bindgen_anon_1: unsafe { mem::zeroed() },
+            wr: rdma_binding::ibv_send_wr__bindgen_ty_2 {
+                rdma: rdma_binding::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
+                    remote_addr,
+                    rkey: remote_rkey,
+                },
+            },
+            qp_type: unsafe { mem::zeroed() },
+            __bindgen_anon_2: unsafe { mem::zeroed() },
+        };
+
+        let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
+        unsafe {
+            let ret =
+                rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut remote_wr, &mut bad_client_send_wr);
             if ret != 0 {
                 return Err(WorkManagerError::OperationFailed(format!(
                     "ibv_post_send_ex failed with error code: {}",

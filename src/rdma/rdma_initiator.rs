@@ -281,18 +281,17 @@ pub mod rdma_initiator {
 
             // assign the buffer containing the data
             self.wr_id_to_buffer[wr_id as usize] = Some(local_buffer);
-            let qp = unsafe { (*self.ctx.cm_id).qp };
 
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
             self.rwm
-                .post_rcv_resp_work(wr_id, qp, resp_sge)
+                .post_rcv_resp_work(wr_id, self.ctx.get_sendable_qp(), resp_sge)
                 .unwrap();
 
             // Then send the request
             let req_sge = self.capsule_context.get_req_sge(wr_id as usize).unwrap();
             self.rwm
-                .post_send_request_work(wr_id, qp, req_sge)
+                .post_send_request_work(wr_id, self.ctx.get_sendable_qp(), req_sge)
                 .map_err(|_| {
                     RdmaTransportError::OpFailed("failed to post send request WR".into())
                 })?;
@@ -333,11 +332,11 @@ pub mod rdma_initiator {
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
             self.rwm
-                .post_rcv_resp_work(wr_id, qp, resp_sge)
+                .post_rcv_resp_work(wr_id, self.ctx.get_sendable_qp(), resp_sge)
                 .unwrap();
             let req_sge = self.capsule_context.get_req_sge(wr_id as usize).unwrap();
             self.rwm
-                .post_send_request_work(wr_id, qp, req_sge)
+                .post_send_request_work(wr_id, self.ctx.get_sendable_qp(), req_sge)
                 .map_err(|_| {
                     RdmaTransportError::OpFailed("failed to post send request WR".into())
                 })?;
@@ -349,7 +348,7 @@ pub mod rdma_initiator {
             let mut n_successes = 0;
             let mut n_failed = 0;
             self.rwm
-                .poll_completed_works(self.ctx.io_comp_channel, self.ctx.cq)
+                .poll_completed_works(self.ctx.get_sendable_io_comp_channel(), self.ctx.get_sendable_cq())
                 .unwrap();
             let mut ret = 0;
 
