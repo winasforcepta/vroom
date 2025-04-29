@@ -4,6 +4,10 @@ use crate::memory::{Dma, DmaSlice};
 use libc::{munmap, size_t, };
 use std::os::raw::{c_int, c_void};
 use std::{io};
+use std::ptr::null_mut;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, Ordering};
+use crossbeam::queue::{ArrayQueue};
 
 pub type BufferManagerIdx = u32;
 pub type PhysicalAddrType = usize;
@@ -14,8 +18,8 @@ pub struct BufferManager {
     n_blocks: u32,
     block_size: usize,
     buffer: ThreadSafeDmaHandle,
-    free_idx_list: Vec<u32>,
-    mr: Option<*mut rdma_binding::ibv_mr>
+    free_idx_list: Arc<ArrayQueue<u32>>,
+    mr: AtomicPtr<rdma_binding::ibv_mr>,
 }
 
 impl BufferManager {
@@ -34,10 +38,10 @@ impl BufferManager {
         }
 
         let block_count: u32 = (total_bytes / block_size_bytes) as u32;
-        let mut free_idx_list = Vec::with_capacity(block_count as usize);
+        let free_idx_list = Arc::new(ArrayQueue::new(block_count as usize));
         let buffer: Dma<u8> = Dma::allocate(total_bytes).unwrap();
         let thread_safe_dma = ThreadSafeDmaHandle::from(&buffer);
-        for i in (0..block_count).rev() { free_idx_list.push(i); }
+        for i in (0..block_count).rev() { free_idx_list.push(i).unwrap(); }
         debug_println_verbose!("[buffer manager] total_bytes = {} block_size_bytes = {} block count = {}", total_bytes, block_size_bytes, block_count);
         Ok(BufferManager {
             total_size: total_bytes,
@@ -45,12 +49,12 @@ impl BufferManager {
             block_size: block_size_bytes,
             buffer: thread_safe_dma,
             free_idx_list,
-            mr: None
+            mr: AtomicPtr::new(null_mut())
         })
     }
 
     pub fn register_mr(
-        &mut self,
+        &self,
         pd_ptr: *mut rdma_binding::ibv_pd,
     ) -> Result<(), RdmaTransportError> {
         assert!(!pd_ptr.is_null(), "Protection domain should not be null");
@@ -73,25 +77,25 @@ impl BufferManager {
             ));
         }
 
-        self.mr = Some(mr_ptr);
+        self.mr.store(mr_ptr, Ordering::SeqCst);
         Ok(())
     }
 
-    pub fn get_memory_info(&mut self, idx: BufferManagerIdx) -> (*mut u8, PhysicalAddrType, usize, u32) {
+    pub fn get_memory_info(&self, idx: BufferManagerIdx) -> (*mut u8, PhysicalAddrType, usize, u32) {
         assert!(idx < self.n_blocks, "get_dma_slice out of index");
         let dma = unsafe { self.buffer.to_dma() };
         let virt = unsafe { dma.virt.add((idx as usize* self.block_size)) };
         let phys = dma.phys + (idx as usize * self.block_size);
-        let lkey = unsafe { (*self.mr.unwrap()).lkey };
+        let lkey = unsafe { (*self.mr.load(Ordering::SeqCst)).lkey };
         (virt, phys, self.block_size, lkey)
     }
 
-    pub fn allocate(&mut self) -> Option<(BufferManagerIdx, *mut rdma_binding::ibv_mr)> {
-        assert!(self.mr.is_some(), "RDMA MR is not registered yet");
+    pub fn allocate(&self) -> Option<(BufferManagerIdx, *mut rdma_binding::ibv_mr)> {
+        assert!(!self.mr.load(Ordering::SeqCst).is_null(), "RDMA MR is not registered yet");
 
         if let Some(idx) = self.free_idx_list.pop() {
             debug_println_verbose!("[Buffer manager] block {} is allocated", idx);
-            Some((idx, self.mr.unwrap()))
+            Some((idx, self.mr.load(Ordering::SeqCst)))
         } else {
             debug_println_verbose!("Failed to pop free_idx_list");
             None
@@ -99,30 +103,26 @@ impl BufferManager {
 
     }
 
-    pub fn free(&mut self, idx: BufferManagerIdx) {
-        self.free_idx_list.push(idx);
+    pub fn free(&self, idx: BufferManagerIdx) {
+        self.free_idx_list.push(idx).unwrap();
     }
 
-    pub fn get_base_dma(&mut self) -> ThreadSafeDmaHandle {
+    pub fn get_base_dma(&self) -> ThreadSafeDmaHandle {
         self.buffer
     }
 
-    pub unsafe fn get_lkey(&mut self) -> Option<u32> {
-        if let Some(mr) = self.mr {
-            Some((*mr).lkey)
-        } else {
-            None
+    pub fn get_lkey(&self) -> Option<u32> {
+        if self.mr.load(Ordering::SeqCst).is_null() {
+            return None
         }
+        Some(unsafe { (*self.mr.load(Ordering::SeqCst)).lkey })
     }
 }
 
 impl Drop for BufferManager {
     fn drop(&mut self) {
         unsafe {
-            if self.mr.is_some() {
-                rdma_binding::ibv_dereg_mr(self.mr.unwrap());
-            }
-
+            rdma_binding::ibv_dereg_mr(self.mr.load(Ordering::SeqCst));
             munmap(
                 self.buffer.virt as *mut c_void,
                 self.total_size,

@@ -1,5 +1,4 @@
 pub mod rdma_target {
-    use crossbeam_channel::{bounded, Receiver, Sender};
     use crate::rdma::buffer_manager::{BufferManager, ThreadSafeDmaHandle};
     use crate::rdma::rdma_common::rdma_binding;
     use crate::rdma::rdma_common::rdma_common::{get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, MAX_WR};
@@ -15,6 +14,7 @@ pub mod rdma_target {
     use std::{io, mem, ptr, thread};
     use std::ffi::CStr;
     use std::time::Duration;
+    use crossbeam::channel::{bounded, Receiver, Sender};
     use crate::memory::DmaSlice;
     use crate::rdma::capsule::capsule::{CapsuleContext};
 
@@ -91,7 +91,7 @@ pub mod rdma_target {
         ctx: TargetRdmaContext,
         client_handlers: Vec<(JoinHandle<()>, JoinHandle<()>, JoinHandle<()>)>,
         client_thread_signal: HashMap<String, Arc<AtomicBool>>,
-        buffer_manager_mtx_arc: Arc<Mutex<BufferManager>>,
+        buffer_manager: Arc<BufferManager>,
         nvme_device_arc: Arc<Mutex<NvmeDevice>>,
         block_size: usize
     }
@@ -207,10 +207,6 @@ pub mod rdma_target {
                 }
             }
 
-            let buffer_manager_arc = Arc::from(Mutex::from(
-                BufferManager::new(reserved_memory, block_size).unwrap(),
-            ));
-
             debug_println_verbose!(
                 "Server is listening at {}:{}",
                 Ipv4Addr::from(u32::from_be(sockaddr.sin_addr.s_addr)),
@@ -221,7 +217,7 @@ pub mod rdma_target {
                 server_sockaddr: sockaddr,
                 client_handlers: vec![],
                 client_thread_signal: Default::default(),
-                buffer_manager_mtx_arc: buffer_manager_arc,
+                buffer_manager: Arc::from(BufferManager::new(reserved_memory, block_size).unwrap()),
                 ctx: TargetRdmaContext::new(server_name.to_string(), cm_event_channel, cm_id),
                 nvme_device_arc: Arc::from(Mutex::from(crate::init(&device_pci_addr).map_err(|_| {
                     RdmaTransportError::OpFailed("Failed to initiate NVMe Device".into())
@@ -288,10 +284,7 @@ pub mod rdma_target {
                             }
                         }
 
-                        {
-                            let mut buffer_manager = self.buffer_manager_mtx_arc.lock().unwrap();
-                            buffer_manager.register_mr(pd_ptr)?;
-                        }
+                        self.buffer_manager.register_mr(pd_ptr)?;
 
                         // ACK the event. rdma_ack_cm_event frees the cm_event object, but not object inside of it.
                         unsafe {
@@ -387,14 +380,9 @@ pub mod rdma_target {
                             Self::_get_client_address(id)
                         };
                         self.client_thread_signal.insert(client_name, Arc::clone(&signal));
-                        let base_dma_handler = {
-                            let mut bm = self.buffer_manager_mtx_arc.lock().unwrap();
-                            bm.get_base_dma()
-                        };
-
-
+                        let base_dma_handler = self.buffer_manager.get_base_dma();
                         let thread_signal = signal.clone();
-                        let thread_buffer_manager = self.buffer_manager_mtx_arc.clone();
+                        let thread_buffer_manager = self.buffer_manager.clone();
                         let signal_clone_2 = thread_signal.clone();
                         let block_size = self.block_size.clone();
                         let (nvme_command_sx, nvme_command_rx) = bounded::<InternalNVMeCommandType>(1024);
@@ -422,10 +410,7 @@ pub mod rdma_target {
                                 }).expect("Failed to run RDMA thread")
                         };
                         let nvme_device_arc_clone = self.nvme_device_arc.clone();
-                        let buffer_lkey = unsafe {
-                            let mut bm = self.buffer_manager_mtx_arc.lock().unwrap();
-                            bm.get_lkey().unwrap()
-                        };
+                        let buffer_lkey = self.buffer_manager.get_lkey().unwrap();
                         let rdma_submission_thread_handle = {
                             let rwm_mutex_clone = rwm_mutex.clone();
                             let rdma_wr_rx_clone = rdma_wr_rx.clone();
@@ -534,7 +519,7 @@ pub mod rdma_target {
         //     - Exchange metadata with client
         fn _run_rdma_completion_thread(
             running_signal: Arc<AtomicBool>,
-            buffer_manager_arc: Arc<Mutex<BufferManager>>,
+            mut buffer_manager: Arc<BufferManager>,
             block_size: usize,
             mut client_context: Arc<ClientRdmaContext>,
             mut capsule_context: Arc<CapsuleContext>,
@@ -654,7 +639,6 @@ pub mod rdma_target {
                             );
 
                             let ((buffer_virtual_add, _, _, _), buffer_idx, lkey) = {
-                                let mut buffer_manager = buffer_manager_arc.lock().unwrap();
                                 let (buffer_idx, mr) = buffer_manager.allocate().expect("Failed to allocate buffer from buffer manager"); // TODO(what should we do when there is no available buffer?)
                                 let lkey = unsafe {
                                     assert!(!mr.is_null(), "Buffer manager MR is null");
@@ -687,9 +671,8 @@ pub mod rdma_target {
                             // means response capsule is sent. Release all resources.
                             {
                                 debug_println!("Response is sent for wr_id: {}", completed_wr_id);
-                                let mut bm = buffer_manager_arc.lock().unwrap();
                                 let buffer_idx = client_context.get_remote_op_buffer(completed_wr_id as usize)?;
-                                bm.free(buffer_idx);
+                                buffer_manager.free(buffer_idx);
                                 client_context.free_remote_op_buffer(completed_wr_id as usize)?;
                                 let new_wr_id = {
                                     let mut rwm = rwm_mutex.lock().unwrap();
