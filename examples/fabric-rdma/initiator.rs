@@ -49,20 +49,14 @@ fn main() {
     let mut cid = 0u16;
     let nvme_addr = 0u64;
     let mut outstanding_requests = 0usize;
-    let layout = Layout::from_size_align(512usize, 1).unwrap();
-    let ptr: *mut u8 = unsafe { alloc(layout) };
-
-    if ptr == ptr::null_mut() {
-        panic!("Failed to allocate memory");
-    }
-
-    let layout = Layout::from_size_align(512usize, 1).unwrap();
+    let block_size = 4096usize;
+    let layout = Layout::from_size_align(block_size, 1).unwrap();
     let buffer_ptr = unsafe { alloc(layout) };
     let mr = unsafe {
         rdma_binding::ibv_reg_mr(
             pd,
             buffer_ptr as *mut c_void,
-            512usize as size_t,
+            block_size as size_t,
             (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
                 | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
                 | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
@@ -74,7 +68,7 @@ fn main() {
 
     for _i in 0..n_write {
         transport
-            .post_remote_io_write(cid, nvme_addr, buffer_ptr, 512u32, rkey)
+            .post_remote_io_write(cid, nvme_addr, buffer_ptr, block_size as u32, rkey)
             .expect("failed to post remote_io_write");
         cid = cid + 1;
         outstanding_requests = outstanding_requests + 1;
@@ -82,7 +76,7 @@ fn main() {
 
     for _i in 0..n_read {
         transport
-            .post_remote_io_read(cid, nvme_addr, buffer_ptr, 512u32, rkey)
+            .post_remote_io_read(cid, nvme_addr, buffer_ptr, block_size as u32, rkey)
             .expect("failed to post remote_io_read");
         cid = cid + 1;
         outstanding_requests = outstanding_requests + 1;

@@ -106,7 +106,7 @@ impl DmaSlice for Dma<u8> {
     }
 
     fn slice(&self, index: Range<usize>) -> Self::Item {
-        assert!(index.end <= self.size, "Index out of bounds");
+        assert!(index.end <= self.size, "Index out of bounds. index.end = {}, self.size = {}", index.end, self.size);
 
         unsafe {
             Dma {

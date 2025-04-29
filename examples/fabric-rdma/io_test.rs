@@ -1,16 +1,17 @@
 use clap::{Parser, ValueEnum};
 use hdrhistogram::Histogram;
+use libc::size_t;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use std::alloc::{alloc, Layout};
 use std::collections::VecDeque;
 use std::net::IpAddr;
-use std::ops::Add;
+use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{fmt, thread};
 use std::time::{Duration, Instant};
-use vroom::rdma::buffer_manager::BufferManager;
+use std::{fmt, thread};
+use vroom::rdma::rdma_common::rdma_binding;
 use vroom::rdma::rdma_initiator::rdma_initiator::RdmaInitiator;
-use vroom::HUGE_PAGE_SIZE;
 
 #[derive(ValueEnum, Debug, Clone, PartialEq)]
 enum IOMode {
@@ -121,7 +122,7 @@ fn generate_lba_offsets(ns_size_bytes: u64, block_size: u64, random: bool) -> Ve
 
     if random {
         // Generate all blocks in random order
-        let mut lbas: Vec<u64> = (0..num_blocks).map(|i| i * block_size).collect();
+        let mut lbas: Vec<u64> = (0..num_blocks).collect();
         lbas.shuffle(&mut rng);
         lbas
     } else {
@@ -136,10 +137,10 @@ fn generate_mode_is_write(ns_size_bytes: u64, block_size: u64, io_mode: IOMode) 
 
     let ret = match io_mode {
         IOMode::Read => {
-            (0..num_blocks).map(|i| true).collect()
+            (0..num_blocks).map(|_i| true).collect()
         }
         IOMode::Write => {
-            (0..num_blocks).map(|i| false).collect()
+            (0..num_blocks).map(|_i| false).collect()
         }
         IOMode::Mixed => {
             let mut generated: Vec<bool> = (0..num_blocks).map(|i| if i % 2 == 0 { false } else { true }).collect();
@@ -174,39 +175,63 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let mut buffer_manager = BufferManager::new(HUGE_PAGE_SIZE, args.block_size as usize).unwrap();
     let mut transport = RdmaInitiator::connect(ipv4, 4421)
         .expect("failed to connect to server and create transport.");
+    let pd = transport.get_pd().expect("failed to get pd");
     thread::sleep(Duration::from_secs(1));
-    let lbas = generate_lba_offsets(args.ns_size_bytes as u64, args.block_size as u64, args.workload == Workload::Random);
-    let io_write_mode = generate_mode_is_write(args.ns_size_bytes as u64, args.block_size as u64, args.mode);
+    let lbas = generate_lba_offsets(args.ns_size_bytes, args.block_size as u64, args.workload == Workload::Random);
+    let io_write_mode = generate_mode_is_write(args.ns_size_bytes, args.block_size as u64, args.mode);
 
-    let (read_io_buffer_idx, read_buffer_mr) = buffer_manager.allocate().unwrap();
-    let (read_io_buffer, _, _, _) = buffer_manager.get_memory_info(read_io_buffer_idx);
-    let read_io_buffer_rkey = unsafe { (*read_buffer_mr).rkey };
-
-    let (write_io_buffer_idx, write_buffer_mr) = buffer_manager.allocate().unwrap();
-    let (write_io_buffer, _, _, _) = buffer_manager.get_memory_info(write_io_buffer_idx);
+    let write_io_buffer_layout = Layout::from_size_align(args.block_size as usize, 1).unwrap();
+    let write_io_buffer = unsafe { alloc(write_io_buffer_layout) };
+    let write_buffer_mr = unsafe {
+        rdma_binding::ibv_reg_mr(
+            pd,
+            write_io_buffer as *mut c_void,
+            args.block_size as size_t,
+            (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
+                | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
+                | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
+                as c_int,
+        )
+    };
     let write_io_buffer_rkey = unsafe { (*write_buffer_mr).rkey };
+
+    let read_io_buffer_layout = Layout::from_size_align(args.block_size as usize, 1).unwrap();
+    let read_io_buffer = unsafe { alloc(read_io_buffer_layout) };
+    let read_buffer_mr = unsafe {
+        rdma_binding::ibv_reg_mr(
+            pd,
+            read_io_buffer as *mut c_void,
+            args.block_size as size_t,
+            (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
+                | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
+                | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
+                as c_int,
+        )
+    };
+    let read_io_buffer_rkey = unsafe { (*read_buffer_mr).rkey };
 
     let duration = Duration::from_secs(args.duration_seconds);
     let mut total = Duration::ZERO;
     let mut total_io = 0;
     let mut step = 0usize;
 
+    println!("benchmark is starting...");
     while total < duration {
         let before = Instant::now();
         while semaphore.try_acquire() {
             let lba = lbas[step];
             let is_write_mode = io_write_mode[step];
-            per_io_time_tracker.push_back(Instant::now());
             match is_write_mode {
                 true => {
+                    per_io_time_tracker.push_back(Instant::now());
                     transport
                         .post_remote_io_write(step as u16, lba, write_io_buffer, args.block_size, write_io_buffer_rkey)
                         .expect("failed to post remote_io_write");
                 }
                 false => {
+                    per_io_time_tracker.push_back(Instant::now());
                     transport
                         .post_remote_io_read(step as u16, lba, read_io_buffer, args.block_size, read_io_buffer_rkey)
                         .expect("failed to post remote_io_read");
@@ -217,34 +242,35 @@ fn main() {
         }
 
         let (ns, nf) = transport.poll_completions().unwrap();
-        semaphore.release((ns + nf) as usize);
-        total_io += (ns + nf) as usize;
         for _i in 0..(ns + nf) {
             let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
             hist.record(latency.max(1)).unwrap() // avoid 0
         }
+        total_io += (ns + nf) as usize;
+        semaphore.release((ns + nf) as usize);
 
         let elapsed = before.elapsed();
         total += elapsed;
     }
+    println!("Benchmark is done. Calculating result...");
 
-    let before = Instant::now();
-    let (ns, nf) = transport.poll_completions().unwrap();
-    total_io += (ns + nf) as usize;
-
-    for _i in 0..(ns + nf) {
-        let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
-        hist.record(latency.max(1)).unwrap() // avoid 0
-    }
-
-    let elapsed = before.elapsed();
-    total += elapsed;
+    // let before = Instant::now();
+    // let (ns, nf) = transport.poll_completions().unwrap();
+    // total_io += (ns + nf) as usize;
+    //
+    // for _i in 0..(ns + nf) {
+    //     let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
+    //     hist.record(latency.max(1)).unwrap() // avoid 0
+    // }
+    //
+    // let elapsed = before.elapsed();
+    // total += elapsed;
 
 
     let actual_runtime_secs = total.as_secs_f64();
     let total_io_bytes = total_io * args.block_size as usize;
 
-    let bandwidth = total_io_bytes as f64 / actual_runtime_secs; // MB/s
+    let bandwidth = total_io_bytes as f64 / actual_runtime_secs; // B/s
     let io_per_sec = total_io as f64 / actual_runtime_secs;
     let latency_min = hist.min(); // nanoseconds
     let latency_percentile_25 = hist.value_at_quantile(0.25); // nanoseconds
