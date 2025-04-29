@@ -2,9 +2,12 @@ use std::alloc::{alloc, Layout};
 use clap::Parser;
 use std::net::IpAddr;
 use std::{ptr, thread};
+use std::os::raw::{c_int, c_void};
 use std::time::Duration;
+use libc::size_t;
 use vroom::{debug_println, HUGE_PAGE_SIZE};
 use vroom::rdma::buffer_manager::BufferManager;
+use vroom::rdma::rdma_common::rdma_binding;
 use vroom::rdma::rdma_initiator::rdma_initiator::RdmaInitiator;
 
 #[derive(Parser, Debug)]
@@ -34,9 +37,9 @@ fn main() {
         }
     };
 
-    let mut buffer_manager = BufferManager::new(HUGE_PAGE_SIZE, 512usize).unwrap();
-    let mut transport = RdmaInitiator::connect(ipv4, 4421, &mut buffer_manager)
+    let mut transport = RdmaInitiator::connect(ipv4, 4421)
         .expect("failed to connect to server and create transport.");
+    let pd = transport.get_pd().expect("failed to get pd");
     thread::sleep(Duration::from_secs(1));
     let mut n_successes = 0;
     let mut n_errors = 0;
@@ -53,13 +56,25 @@ fn main() {
         panic!("Failed to allocate memory");
     }
 
-    let (buffer_idx, mr) = buffer_manager.allocate().unwrap();
-    let (buffer, _, _, _) = buffer_manager.get_memory_info(buffer_idx);
+    let layout = Layout::from_size_align(512usize, 1).unwrap();
+    let buffer_ptr = unsafe { alloc(layout) };
+    let mr = unsafe {
+        rdma_binding::ibv_reg_mr(
+            pd,
+            buffer_ptr as *mut c_void,
+            512usize as size_t,
+            (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
+                | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
+                | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
+                as c_int,
+        )
+    };
+
     let rkey = unsafe { (*mr).rkey };
 
     for _i in 0..n_write {
         transport
-            .post_remote_io_write(cid, nvme_addr, buffer, 512u32, rkey)
+            .post_remote_io_write(cid, nvme_addr, buffer_ptr, 512u32, rkey)
             .expect("failed to post remote_io_write");
         cid = cid + 1;
         outstanding_requests = outstanding_requests + 1;
@@ -67,7 +82,7 @@ fn main() {
 
     for _i in 0..n_read {
         transport
-            .post_remote_io_read(cid, nvme_addr, buffer, 512u32, rkey)
+            .post_remote_io_read(cid, nvme_addr, buffer_ptr, 512u32, rkey)
             .expect("failed to post remote_io_read");
         cid = cid + 1;
         outstanding_requests = outstanding_requests + 1;

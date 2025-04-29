@@ -53,8 +53,7 @@ pub mod rdma_initiator {
     impl RdmaInitiator {
         pub fn connect(
             ipv4addr: Ipv4Addr,
-            port: u16,
-            buffer_manager: &mut BufferManager,
+            port: u16
         ) -> Result<Self, RdmaTransportError> {
             let err_msg: String;
             let mut server_sockaddr = rdma_binding::sockaddr_in {
@@ -192,7 +191,6 @@ pub mod rdma_initiator {
                 }
             }
 
-            buffer_manager.register_mr(pd_ptr)?;
             let mut ctx = ClientRdmaContext::new(cm_id_ptr, pd_ptr, MAX_WR as u16)?;
             debug_println_verbose!("resource setup: context created.");
 
@@ -328,7 +326,6 @@ pub mod rdma_initiator {
 
             // assign the buffer containing the data
             self.wr_id_to_buffer[wr_id as usize] = Some(local_buffer);
-            let qp = unsafe { (*self.ctx.cm_id).qp };
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
             self.rwm
@@ -373,6 +370,10 @@ pub mod rdma_initiator {
             }
 
             Ok((n_successes, n_failed))
+        }
+
+        pub fn get_pd(&mut self) -> Result<*mut rdma_binding::ibv_pd, RdmaTransportError> {
+            Ok(self.ctx.pd)
         }
     }
 }

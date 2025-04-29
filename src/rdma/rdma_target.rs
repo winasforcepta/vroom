@@ -13,7 +13,7 @@ pub mod rdma_target {
     use std::{io, mem, ptr, thread};
     use std::ffi::CStr;
     use std::time::Duration;
-    use crossbeam::channel::{bounded, Receiver, Sender};
+    use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
     use crate::memory::DmaSlice;
     use crate::rdma::capsule::capsule::{CapsuleContext};
     use crate::rdma::rdma_work_manager::RdmaWorkManager;
@@ -323,6 +323,7 @@ pub mod rdma_target {
                         }
 
                         debug_println_verbose!("waiting for : RDMA_CM_EVENT_ESTABLISHED event...");
+                        let mut client_name;
 
                         unsafe {
                             let mut cm_event: *mut rdma_binding::rdma_cm_event = ptr::null_mut();
@@ -345,6 +346,11 @@ pub mod rdma_target {
                                     message: err_msg
                                 });
                             }
+
+                            client_name = unsafe {
+                                let id = (*cm_event).id;
+                                Self::_get_client_address(id)
+                            };
 
                             rdma_binding::rdma_ack_cm_event(cm_event);
 
@@ -369,10 +375,6 @@ pub mod rdma_target {
                         debug_println_verbose!("Posting rcv work: success");
                         debug_println!("A new connection is accepted.");
                         let signal = Arc::new(AtomicBool::new(true));
-                        let client_name = unsafe {
-                            let id = (*cm_event).id;
-                            Self::_get_client_address(id)
-                        };
                         self.client_thread_signal.insert(client_name, Arc::clone(&signal));
                         let base_dma_handler = self.buffer_manager.get_base_dma();
                         let thread_signal = signal.clone();
@@ -528,7 +530,7 @@ pub mod rdma_target {
                 //  - poll_completion
                 //  - loop over the completed WCs
                 //  - post next works accordingly
-                debug_println!("Polling RDMA completion....");
+                debug_println!("[RDMA COMPLETION THREAD] Polling RDMA completion....");
                 let io_comp_channel = client_context.get_sendable_io_comp_channel();
                 let cq = client_context.get_sendable_cq();
                 rdma_work_manager.poll_completed_works(io_comp_channel, cq).unwrap();
@@ -540,7 +542,7 @@ pub mod rdma_target {
                     let wc_status;
 
                     {
-                        debug_println!("Polling RDMA completion....");
+                        debug_println!("[RDMA COMPLETION THREAD] Polling RDMA completion....");
                         let wc_opt = rdma_work_manager.next_wc();
 
                         match wc_opt {
@@ -575,7 +577,7 @@ pub mod rdma_target {
                         };
 
                         println!(
-                            "Got a completion wr_id: {}, op_code: {}, status: {}",
+                            "[RDMA COMPLETION THREAD] Got a completion wr_id: {}, op_code: {}, status: {}",
                             completed_wr_id,
                             op_code_str,
                             status_str
@@ -588,7 +590,7 @@ pub mod rdma_target {
                     }
 
                     if wc_status != rdma_binding::ibv_wc_status_IBV_WC_SUCCESS {
-                        debug_println!("Releasing wr_id after failed RDMA WC....");
+                        debug_println!("[RDMA COMPLETION THREAD] Releasing wr_id after failed RDMA WC....");
                         rdma_work_manager.release_wr(completed_wr_id as u16).map_err(|_| {
                             RdmaTransportError::OpFailed("failed to release WR".into())
                         })?;
@@ -616,7 +618,7 @@ pub mod rdma_target {
                                 .unwrap();
 
                             debug_println!(
-                                "received I/O request. cmd_opcode: {}, len: {}",
+                                "[RDMA COMPLETION THREAD] received I/O request. cmd_opcode: {}, len: {}",
                                 cmd.opcode,
                                 data_len
                             );
@@ -653,14 +655,14 @@ pub mod rdma_target {
                         rdma_binding::ibv_wc_opcode_IBV_WC_SEND => {
                             // means response capsule is sent. Release all resources.
                             {
-                                debug_println!("Response is sent for wr_id: {}", completed_wr_id);
+                                debug_println!("[RDMA COMPLETION THREAD] Response is sent for wr_id: {}", completed_wr_id);
                                 let buffer_idx = client_context.get_remote_op_buffer(completed_wr_id as usize)?;
                                 buffer_manager.free(buffer_idx);
                                 client_context.free_remote_op_buffer(completed_wr_id as usize)?;
                                 rdma_work_manager.release_wr(completed_wr_id as u16).unwrap();
                                 let new_wr_id = rdma_work_manager.allocate_wr_id().unwrap();
                                 let sge = capsule_context.get_req_sge(new_wr_id as usize).unwrap();
-                                debug_println_verbose!("Posting another receive request with wr_id={}", completed_wr_id);
+                                debug_println_verbose!("[RDMA COMPLETION THREAD] Posting another receive request with wr_id={}", completed_wr_id);
                                 rdma_wr_sx.send(RDMAWorkRequest {
                                     wr_id: new_wr_id,
                                     sge,
@@ -707,7 +709,15 @@ pub mod rdma_target {
             rdma_wr_rx: Receiver<RDMAWorkRequest>
         ) -> Result<i32, RdmaTransportError> {
             loop {
-                let rdma_wr = rdma_wr_rx.recv().unwrap();
+                let rdma_wr = match rdma_wr_rx.recv() {
+                    Ok(wr) => {
+                        wr
+                    }
+                    Err(_) => {
+                        break;
+                    }
+                };
+
                 let qp = client_context.get_sendable_qp();
 
                 if rdma_wr.mode.is_none() { // it means RDMA rcv request
@@ -718,9 +728,11 @@ pub mod rdma_target {
                 let mode = rdma_wr.mode.unwrap();
                 match mode {
                     rdma_binding::ibv_wr_opcode_IBV_WR_SEND => {
+                        debug_println_verbose!("[RDMA SUBMISSION THREAD] post_send_response_work wr_id={}", rdma_wr.wr_id);
                         rdma_work_manager.post_send_response_work(rdma_wr.wr_id, qp, rdma_wr.sge).unwrap();
                     },
                     rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_READ => {
+                        debug_println_verbose!("[RDMA SUBMISSION THREAD] post_rmt_work READ wr_id={}", rdma_wr.wr_id);
                         rdma_work_manager.post_rmt_work(
                             rdma_wr.wr_id,
                             qp,
@@ -731,6 +743,7 @@ pub mod rdma_target {
                         ).expect("Panic: failed to post remote work");
                     },
                     rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_WRITE => {
+                        debug_println_verbose!("[RDMA SUBMISSION THREAD] post_rmt_work WRITE wr_id={}", rdma_wr.wr_id);
                         rdma_work_manager.post_rmt_work(
                             rdma_wr.wr_id,
                             qp,
@@ -766,7 +779,7 @@ pub mod rdma_target {
 
             while running_signal.load(Ordering::SeqCst) || current_command.is_some() {
                 while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
-                    debug_println!("[NVMe Device] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
+                    debug_println!("[NVMe Device Thread] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
                     let wr_id = completion.c_id & 0x7FF;
 
                     let (opcode, virtual_addr, r_key, data_len, resp_sge) = {
@@ -779,7 +792,7 @@ pub mod rdma_target {
 
                     match opcode {
                         1 => { // NVMe write is completed -> send response
-                            debug_println_verbose!("Found NVMe device write I/O completion ....");
+                            debug_println_verbose!("[NVMe Device Thread] Found NVMe device write I/O completion ....");
                             {
                                 let mut capsule = capsule_context.get_resp_capsule(wr_id as usize).unwrap();
                                 capsule.status = (completion.status >> 1) as i16;
@@ -819,7 +832,7 @@ pub mod rdma_target {
                     c_id_to_offset_map[c_id as usize] = Some(start_offset);
 
                     unsafe {
-                        debug_println!("[NVMe Device] Submit I/O {} command: bytes_offset: {}, lba: {}, size: {}", if write { "WRITE" } else { "READ" }, start_offset, lba, size);
+                        debug_println!("[NVMe Device Thread] Submit I/O {} command: bytes_offset: {}, lba: {}, size: {}", if write { "WRITE" } else { "READ" }, start_offset, lba, size);
                         nvme_queue_pair.submit_io_with_cid(
                             &base_dma.to_dma().slice(start_offset..start_offset + size),
                             lba,
