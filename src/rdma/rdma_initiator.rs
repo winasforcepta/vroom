@@ -5,7 +5,7 @@ pub mod rdma_initiator {
     use crate::rdma::rdma_common::rdma_common::{
         get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, MAX_WR,
     };
-    use crate::rdma::rdma_work_manager::rdma_work_manager::RdmaWorkManager;
+    use crate::rdma::rdma_work_manager::RdmaWorkManager;
     use crate::debug_println_verbose;
     use std::net::Ipv4Addr;
     use std::{mem, ptr};

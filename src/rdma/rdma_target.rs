@@ -3,7 +3,6 @@ pub mod rdma_target {
     use crate::rdma::rdma_common::rdma_binding;
     use crate::rdma::rdma_common::rdma_common::{get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, MAX_WR};
     use crate::rdma::rdma_common::*;
-    use crate::rdma::rdma_work_manager::rdma_work_manager::{post_rmt_work, post_send_response_work, RdmaWorkManager};
     use crate::{NvmeDevice, NvmeQueuePair, QUEUE_LENGTH};
     use std::collections::{HashMap};
     use std::net::Ipv4Addr;
@@ -17,6 +16,7 @@ pub mod rdma_target {
     use crossbeam::channel::{bounded, Receiver, Sender};
     use crate::memory::DmaSlice;
     use crate::rdma::capsule::capsule::{CapsuleContext};
+    use crate::rdma::rdma_work_manager::RdmaWorkManager;
 
     type InternalNVMeCommandType = (
         u16, // cid
@@ -47,7 +47,7 @@ pub mod rdma_target {
 
     struct TargetRdmaContext {
         name: String,
-        cm_event_channel_arc: Arc<Mutex<RdmaEventChannelPtr>>,
+        cm_event_channel: RdmaEventChannelPtr,
         cm_id: *mut rdma_binding::rdma_cm_id,
     }
     impl TargetRdmaContext {
@@ -58,7 +58,7 @@ pub mod rdma_target {
         ) -> Self {
             TargetRdmaContext {
                 name,
-                cm_event_channel_arc: Arc::from(Mutex::from(RdmaEventChannelPtr(cm_event_channel))),
+                cm_event_channel: RdmaEventChannelPtr(cm_event_channel),
                 cm_id,
             }
         }
@@ -80,8 +80,7 @@ pub mod rdma_target {
             }
 
             unsafe {
-                let cm_event_channel = self.cm_event_channel_arc.lock().unwrap().0;
-                rdma_binding::rdma_destroy_event_channel(cm_event_channel);
+                rdma_binding::rdma_destroy_event_channel(self.cm_event_channel.0);
             }
         }
     }
@@ -234,8 +233,7 @@ pub mod rdma_target {
             loop {
                 let mut cm_event: *mut rdma_binding::rdma_cm_event = ptr::null_mut();
                 {
-                    let cm_event_channel = self.ctx.cm_event_channel_arc.lock().unwrap().0;
-                    let rc = process_cm_event(cm_event_channel, &mut cm_event)?;
+                    let rc = process_cm_event(self.ctx.cm_event_channel.0, &mut cm_event)?;
                     if rc != 0 {
                         err_msg = format!("{}: Failed to get cm event: {}", self.ctx.name, rc);
                         return Err(RdmaTransportError::OpFailedEx {
@@ -328,8 +326,7 @@ pub mod rdma_target {
 
                         unsafe {
                             let mut cm_event: *mut rdma_binding::rdma_cm_event = ptr::null_mut();
-                            let server_event_channel = self.ctx.cm_event_channel_arc.lock().unwrap().0;
-                            let rc = process_cm_event(server_event_channel, &mut cm_event)?;
+                            let rc = process_cm_event(self.ctx.cm_event_channel.0, &mut cm_event)?;
                             if rc != 0 {
                                 let err_msg = format!("{}: Failed to get cm event: {}", client_context._name, rc);
                                 return Err(RdmaTransportError::OpFailedEx {
@@ -360,17 +357,14 @@ pub mod rdma_target {
                             }
                         }
 
-                        let mut rwm_mutex = Arc::from(Mutex::from(RdmaWorkManager::new(MAX_WR as u16)));
+                        let mut rdma_work_manager = Arc::from(RdmaWorkManager::new(MAX_WR as u16));
                         debug_println_verbose!("Handling client thread start.");
                         // Initially post recv WR. Saturate the queue.
                         debug_println_verbose!("Posting rcv work");
-                        {
-                            let mut rwm = rwm_mutex.lock().unwrap();
-                            while let Some(wr_id) = rwm.allocate_wr_id() {
-                                let sge = capsule_context.get_req_sge(wr_id as usize).unwrap();
-                                let qp = client_context.get_sendable_qp();
-                                rwm.post_rcv_req_work(wr_id, qp, sge).expect("PANIC: failed to post RDMA recv.");
-                            }
+                        while let Some(wr_id) = rdma_work_manager.allocate_wr_id() {
+                            let sge = capsule_context.get_req_sge(wr_id as usize).unwrap();
+                            let qp = client_context.get_sendable_qp();
+                            rdma_work_manager.post_rcv_req_work(wr_id, qp, sge).expect("PANIC: failed to post RDMA recv.");
                         }
                         debug_println_verbose!("Posting rcv work: success");
                         debug_println!("A new connection is accepted.");
@@ -388,7 +382,7 @@ pub mod rdma_target {
                         let (nvme_command_sx, nvme_command_rx) = bounded::<InternalNVMeCommandType>(1024);
                         let (rdma_wr_sx, rdma_wr_rx) = bounded::<RDMAWorkRequest>(1024);
                         let rdma_completion_thread_handle = {
-                            let rwm_mutex_clone = rwm_mutex.clone();
+                            let rdma_work_manager_clone = rdma_work_manager.clone();
                             let signal_clone = thread_signal.clone();
                             let capsule_context_clone = capsule_context.clone();
                             let rdma_wr_sx_clone = rdma_wr_sx.clone();
@@ -405,14 +399,14 @@ pub mod rdma_target {
                                         capsule_context_clone,
                                         nvme_command_sx,
                                         rdma_wr_sx_clone,
-                                        rwm_mutex_clone
+                                        rdma_work_manager_clone
                                     ).expect(format!("PANIC: handling RDMA thread {}", client_number.to_string()).as_str());
                                 }).expect("Failed to run RDMA thread")
                         };
                         let nvme_device_arc_clone = self.nvme_device_arc.clone();
                         let buffer_lkey = self.buffer_manager.get_lkey().unwrap();
                         let rdma_submission_thread_handle = {
-                            let rwm_mutex_clone = rwm_mutex.clone();
+                            let rdma_work_manager_clone = rdma_work_manager.clone();
                             let rdma_wr_rx_clone = rdma_wr_rx.clone();
                             let client_context_clone = client_context.clone();
 
@@ -421,7 +415,7 @@ pub mod rdma_target {
                                 .spawn(move || {
                                     RdmaTarget::_run_rdma_submission_thread(
                                         client_context_clone,
-                                        rwm_mutex_clone,
+                                        rdma_work_manager_clone,
                                         rdma_wr_rx_clone
                                     ).expect(format!("PANIC: handling RDMA submission thread {}", client_number.to_string()).as_str());
                                 }).expect("Failed to run RDMA submission thread")
@@ -525,12 +519,9 @@ pub mod rdma_target {
             mut capsule_context: Arc<CapsuleContext>,
             nvme_command_sx: Sender<InternalNVMeCommandType>,
             rdma_wr_sx: Sender<RDMAWorkRequest>,
-            rwm_mutex: Arc<Mutex<RdmaWorkManager>>
+            rdma_work_manager: Arc<RdmaWorkManager>
         ) -> Result<i32, RdmaTransportError> {
-            let mut any_inflight_wr = {
-                let rwm = rwm_mutex.lock().unwrap();
-                rwm.any_inflight_wr()
-            };
+            let mut any_inflight_wr = rdma_work_manager.any_inflight_wr();
 
             while running_signal.load(Ordering::SeqCst) || any_inflight_wr {
                 // idea: for every loop:
@@ -538,12 +529,9 @@ pub mod rdma_target {
                 //  - loop over the completed WCs
                 //  - post next works accordingly
                 debug_println!("Polling RDMA completion....");
-                {
-                    let mut rwm = rwm_mutex.lock().unwrap();
-                    let io_comp_channel = client_context.get_sendable_io_comp_channel();
-                    let cq = client_context.get_sendable_cq();
-                    rwm.poll_completed_works(io_comp_channel, cq).unwrap();
-                };
+                let io_comp_channel = client_context.get_sendable_io_comp_channel();
+                let cq = client_context.get_sendable_cq();
+                rdma_work_manager.poll_completed_works(io_comp_channel, cq).unwrap();
 
                 loop {
                     let completed_wr_id;
@@ -553,8 +541,7 @@ pub mod rdma_target {
 
                     {
                         debug_println!("Polling RDMA completion....");
-                        let mut rwm = rwm_mutex.lock().unwrap();
-                        let wc_opt = rwm.next_wc();
+                        let wc_opt = rdma_work_manager.next_wc();
 
                         match wc_opt {
                             None => {
@@ -596,19 +583,15 @@ pub mod rdma_target {
                     }
 
                     if !running_signal.load(Ordering::SeqCst) {
-                        let mut rwm = rwm_mutex.lock().unwrap();
-                        rwm.release_wr(completed_wr_id as u16).map_err(|_| { RdmaTransportError::OpFailed("failed to release WR".into()) })?;
+                        rdma_work_manager.release_wr(completed_wr_id as u16).map_err(|_| { RdmaTransportError::OpFailed("failed to release WR".into()) })?;
                         continue;
                     }
 
                     if wc_status != rdma_binding::ibv_wc_status_IBV_WC_SUCCESS {
                         debug_println!("Releasing wr_id after failed RDMA WC....");
-                        {
-                            let mut rwm = rwm_mutex.lock().unwrap();
-                            rwm.release_wr(completed_wr_id as u16).map_err(|_| {
-                                RdmaTransportError::OpFailed("failed to release WR".into())
-                            })?;
-                        }
+                        rdma_work_manager.release_wr(completed_wr_id as u16).map_err(|_| {
+                            RdmaTransportError::OpFailed("failed to release WR".into())
+                        })?;
                         
                         if op_code == rdma_binding::ibv_wc_opcode_IBV_WC_RECV {
                             // client might be disconnected
@@ -674,11 +657,8 @@ pub mod rdma_target {
                                 let buffer_idx = client_context.get_remote_op_buffer(completed_wr_id as usize)?;
                                 buffer_manager.free(buffer_idx);
                                 client_context.free_remote_op_buffer(completed_wr_id as usize)?;
-                                let new_wr_id = {
-                                    let mut rwm = rwm_mutex.lock().unwrap();
-                                    rwm.release_wr(completed_wr_id as u16).unwrap();
-                                    rwm.allocate_wr_id().unwrap()
-                                };
+                                rdma_work_manager.release_wr(completed_wr_id as u16).unwrap();
+                                let new_wr_id = rdma_work_manager.allocate_wr_id().unwrap();
                                 let sge = capsule_context.get_req_sge(new_wr_id as usize).unwrap();
                                 debug_println_verbose!("Posting another receive request with wr_id={}", completed_wr_id);
                                 rdma_wr_sx.send(RDMAWorkRequest {
@@ -715,10 +695,7 @@ pub mod rdma_target {
                     }
                 }
 
-                any_inflight_wr = {
-                    let rwm = rwm_mutex.lock().unwrap();
-                    rwm.any_inflight_wr()
-                };
+                any_inflight_wr = rdma_work_manager.any_inflight_wr();
             }
 
             Ok(0)
@@ -726,7 +703,7 @@ pub mod rdma_target {
 
         fn _run_rdma_submission_thread(
             client_context: Arc<ClientRdmaContext>,
-            rwm_mutex: Arc<Mutex<RdmaWorkManager>>,
+            rdma_work_manager: Arc<RdmaWorkManager>,
             rdma_wr_rx: Receiver<RDMAWorkRequest>
         ) -> Result<i32, RdmaTransportError> {
             loop {
@@ -734,20 +711,17 @@ pub mod rdma_target {
                 let qp = client_context.get_sendable_qp();
 
                 if rdma_wr.mode.is_none() { // it means RDMA rcv request
-                    {
-                        let mut rwm = rwm_mutex.lock().unwrap();
-                        rwm.post_rcv_req_work(rdma_wr.wr_id, qp, rdma_wr.sge).unwrap();
-                    }
+                    rdma_work_manager.post_rcv_req_work(rdma_wr.wr_id, qp, rdma_wr.sge).unwrap();
                     continue;
                 }
 
                 let mode = rdma_wr.mode.unwrap();
                 match mode {
                     rdma_binding::ibv_wr_opcode_IBV_WR_SEND => {
-                        post_send_response_work(rdma_wr.wr_id, qp, rdma_wr.sge).unwrap();
+                        rdma_work_manager.post_send_response_work(rdma_wr.wr_id, qp, rdma_wr.sge).unwrap();
                     },
                     rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_READ => {
-                        post_rmt_work(
+                        rdma_work_manager.post_rmt_work(
                             rdma_wr.wr_id,
                             qp,
                             rdma_wr.sge,
@@ -757,7 +731,7 @@ pub mod rdma_target {
                         ).expect("Panic: failed to post remote work");
                     },
                     rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_WRITE => {
-                        post_rmt_work(
+                        rdma_work_manager.post_rmt_work(
                             rdma_wr.wr_id,
                             qp,
                             rdma_wr.sge,

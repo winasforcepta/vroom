@@ -7,4 +7,4 @@ pub mod rdma_common;
 pub mod rdma_initiator;
 pub mod rdma_target;
 pub mod rdma_work_manager;
-pub mod ring_buffer;
+
