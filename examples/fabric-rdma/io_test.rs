@@ -241,16 +241,15 @@ fn main() {
             step = (step + 1) % lbas.len();
         }
 
-        let (ns, nf) = transport.poll_completions().unwrap();
-        for _i in 0..(ns + nf) {
+        if let Some(_completion) = transport.poll_single_completion().unwrap() {
             let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
             if latency >= 1_000_000 {
                 println!("[suspicious] high latency I/O {} ns", latency);
             }
-            hist.record(latency.max(1)).unwrap() // avoid 0
+            hist.record(latency.max(1)).unwrap();
+            total_io += 1;
+            semaphore.release(1);
         }
-        total_io += (ns + nf) as usize;
-        semaphore.release((ns + nf) as usize);
 
         let elapsed = before.elapsed();
         total += elapsed;

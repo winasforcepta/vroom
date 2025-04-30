@@ -372,6 +372,43 @@ pub mod rdma_initiator {
             Ok((n_successes, n_failed))
         }
 
+        pub fn poll_single_completion(&mut self) -> Result<Option<bool>, RdmaTransportError> {
+            self.rwm
+                .poll_completed_works(self.ctx.get_sendable_io_comp_channel(), self.ctx.get_sendable_cq())
+                .unwrap();
+
+            let ret = {
+                if let Some(wc) = self.rwm.next_wc() {
+                    let wr_id = wc.wr_id.clone();
+                    let op_code = wc.opcode.clone();
+                    let status = {
+                        if op_code == rdma_binding::ibv_wc_opcode_IBV_WC_RECV {
+                            self.rwm.release_wr(wr_id as u16).unwrap();
+                            if wc.status != rdma_binding::ibv_wc_status_IBV_WC_SUCCESS {
+                                debug_println!(
+                                "[UNSUCCESSFUL] wc {} is not success: opcode={}, status={}",
+                                wc.wr_id,
+                                wc.opcode,
+                                wc.status
+                            );
+                                Some(false)
+                            } else {
+                                Some(true)
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
+                    status
+                } else {
+                    None
+                }
+            };
+
+            Ok(ret)
+        }
+
         pub fn get_pd(&mut self) -> Result<*mut rdma_binding::ibv_pd, RdmaTransportError> {
             Ok(self.ctx.pd)
         }
