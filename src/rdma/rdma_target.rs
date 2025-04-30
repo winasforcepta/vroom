@@ -7,11 +7,13 @@ pub mod rdma_target {
     use std::collections::{HashMap};
     use std::net::Ipv4Addr;
     use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{spin_loop_hint, AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::{io, mem, ptr, thread};
     use std::ffi::CStr;
+    use std::hint::spin_loop;
+    use std::ops::Add;
     use std::time::Duration;
     use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
     use crossbeam::select;
@@ -771,10 +773,27 @@ pub mod rdma_target {
             rdma_wr_sx: Sender<RDMAWorkRequest>
         ) -> Result<i32, RdmaTransportError> {
             let mut c_id_to_offset_map: Vec<Option<usize>> = vec![None; QUEUE_LENGTH];
-            let mut current_command = None ;
+            let mut current_command = Some(nvme_command_rx.recv().unwrap()) ;
+            let mut empty_result_cnt = 0usize;
 
             while running_signal.load(Ordering::SeqCst) {
+                if let Some((c_id, start_offset, lba, write, size)) = current_command {
+                    empty_result_cnt = 0;
+                    c_id_to_offset_map[c_id as usize] = Some(start_offset);
+
+                    unsafe {
+                        debug_println_verbose!("[NVMe Device Thread] Submit I/O {} command: bytes_offset: {}, lba: {}, size: {}", if write { "WRITE" } else { "READ" }, start_offset, lba, size);
+                        nvme_queue_pair.submit_io_with_cid(
+                            &base_dma.to_dma().slice(start_offset..start_offset + size),
+                            lba,
+                            write,
+                            c_id
+                        );
+                    }
+                }
+
                 while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
+                    empty_result_cnt = 0; // if find any, reset the counter
                     debug_println!("[NVMe Device Thread] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
                     let wr_id = completion.c_id & 0x7FF;
 
@@ -824,28 +843,55 @@ pub mod rdma_target {
                     }
                 }
 
-                if let Some((c_id, start_offset, lba, write, size)) = current_command {
-                    c_id_to_offset_map[c_id as usize] = Some(start_offset);
-
-                    unsafe {
-                        debug_println!("[NVMe Device Thread] Submit I/O {} command: bytes_offset: {}, lba: {}, size: {}", if write { "WRITE" } else { "READ" }, start_offset, lba, size);
-                        nvme_queue_pair.submit_io_with_cid(
-                            &base_dma.to_dma().slice(start_offset..start_offset + size),
-                            lba,
-                            write,
-                            c_id
-                        );
+                match empty_result_cnt {
+                    0..=1000 => {
+                        // do nothing == spin loop
+                        spin_loop(); // hint CPU
+                    },
+                    1001..=2500 => {
+                        // yield
+                        thread::yield_now();
+                    },
+                    2501..=2510 => {
+                        // micro-seconds sleep (make sure 1/4 of expected NVMe I/O latency
+                        thread::sleep(Duration::from_micros(5))
+                    },
+                    2511..=3000 => {
+                        // Accommodate big block I/O
+                        thread::sleep(Duration::from_micros(100))
+                    },
+                    3000..=3060 => {
+                        // Accommodate big block I/O
+                        debug_println_verbose!("[NVMe Device Thread] arrived {} steps without new submission. Sleeping for 1 seconds", empty_result_cnt);
+                        thread::sleep(Duration::from_secs(1))
+                    },
+                    _ => {
+                        // do nothing, we will block in the next step
                     }
                 }
 
-                select! {
-                    recv(nvme_command_rx) -> msg => {
-                        current_command = Some(msg.unwrap())
+                current_command = match empty_result_cnt {
+                    0..=3060 => {
+                        match nvme_command_rx.try_recv() {
+                            Ok(_cmd) => {
+                                Some(_cmd)
+                            }
+                            Err(_) => {
+                                None
+                            }
+                        }
                     },
-                    default(Duration::from_micros(50)) => {
-                        current_command = None;
-                        thread::yield_now();
+                    _ => {
+                        // use rcv
+                        debug_println_verbose!("[NVMe Device Thread] blocking waiting nvme_command_rx.recv()");
+                        Some(nvme_command_rx.recv().unwrap())
                     }
+                };
+
+                if current_command.is_none() {
+                    empty_result_cnt += 1;
+                } else {
+                    empty_result_cnt = 0;
                 }
             }
 
