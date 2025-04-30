@@ -244,6 +244,9 @@ fn main() {
         let (ns, nf) = transport.poll_completions().unwrap();
         for _i in 0..(ns + nf) {
             let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
+            if latency >= 1_000_000 {
+                println!("[suspicious] high latency I/O {} ns", latency);
+            }
             hist.record(latency.max(1)).unwrap() // avoid 0
         }
         total_io += (ns + nf) as usize;
