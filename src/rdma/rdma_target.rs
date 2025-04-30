@@ -14,6 +14,7 @@ pub mod rdma_target {
     use std::ffi::CStr;
     use std::time::Duration;
     use crossbeam::channel::{bounded, Receiver, RecvError, Sender};
+    use crossbeam::select;
     use crate::memory::DmaSlice;
     use crate::rdma::capsule::capsule::{CapsuleContext};
     use crate::rdma::rdma_work_manager::RdmaWorkManager;
@@ -594,7 +595,7 @@ pub mod rdma_target {
                         rdma_work_manager.release_wr(completed_wr_id as u16).map_err(|_| {
                             RdmaTransportError::OpFailed("failed to release WR".into())
                         })?;
-                        
+
                         if op_code == rdma_binding::ibv_wc_opcode_IBV_WC_RECV {
                             // client might be disconnected
                             if wc_status == rdma_binding::ibv_wc_status_IBV_WC_WR_FLUSH_ERR {
@@ -669,7 +670,7 @@ pub mod rdma_target {
                                     mode: None,
                                     remote_info: None
                                 }).expect("PANIC: Failed to send IBV_WR_RDMA_RECV command to the RDMA submission thread.");
-                                
+
                             }
                         }
                         rdma_binding::ibv_wc_opcode_IBV_WC_RDMA_READ => {
@@ -770,14 +771,9 @@ pub mod rdma_target {
             rdma_wr_sx: Sender<RDMAWorkRequest>
         ) -> Result<i32, RdmaTransportError> {
             let mut c_id_to_offset_map: Vec<Option<usize>> = vec![None; QUEUE_LENGTH];
-            let mut current_command = match nvme_command_rx.try_recv() {
-                Ok(_cmd) => {
-                    Some(_cmd)
-                },
-                Err(_) => None
-            };
+            let mut current_command = None ;
 
-            while running_signal.load(Ordering::SeqCst) || current_command.is_some() {
+            while running_signal.load(Ordering::SeqCst) {
                 while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
                     debug_println!("[NVMe Device Thread] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
                     let wr_id = completion.c_id & 0x7FF;
@@ -842,12 +838,15 @@ pub mod rdma_target {
                     }
                 }
 
-                current_command = match nvme_command_rx.try_recv() {
-                    Ok(_cmd) => {
-                        Some(_cmd)
+                select! {
+                    recv(nvme_command_rx) -> msg => {
+                        current_command = Some(msg.unwrap())
                     },
-                    Err(_) => None
-                };
+                    default(Duration::from_micros(50)) => {
+                        current_command = None;
+                        thread::yield_now();
+                    }
+                }
             }
 
             Ok(0)
