@@ -370,6 +370,7 @@ pub mod rdma_target {
                         debug_println_verbose!("Handling client thread start.");
                         // Initially post recv WR. Saturate the queue.
                         debug_println_verbose!("Posting rcv work");
+                        rdma_work_manager.request_for_notification(client_context.cq).expect("Panic: requesting notification before saturating the queue with RECV WR");
                         while let Some(wr_id) = rdma_work_manager.allocate_wr_id() {
                             let sge = capsule_context.get_req_sge(wr_id as usize).unwrap();
                             let qp = client_context.get_sendable_qp();
@@ -579,12 +580,14 @@ pub mod rdma_target {
                                 .into_owned()
                         };
 
-                        println!(
-                            "[RDMA COMPLETION THREAD] Got a completion wr_id: {}, op_code: {}, status: {}",
-                            completed_wr_id,
-                            op_code_str,
-                            status_str
-                        );
+                        if status_str !=  "Work Request Flushed Error" {
+                            println!(
+                                "[RDMA COMPLETION THREAD] Got a completion wr_id: {}, op_code: {}, status: {}",
+                                completed_wr_id,
+                                op_code_str,
+                                status_str
+                            );
+                        }
                     }
 
                     if !running_signal.load(Ordering::SeqCst) {

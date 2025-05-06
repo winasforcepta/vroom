@@ -120,6 +120,34 @@ impl RdmaWorkManager {
         unsafe { *self.n_completed_work.get() > 0 }
     }
 
+    pub fn reset_wc(&self) -> (u16, u16) {
+        let mut n_suc = 0u16;
+        let mut n_fail = 0u16;
+
+        let (mut i, n) = unsafe {
+            (*self.first_unprocessed_wc_index.get(), *self.n_completed_work.get())
+        };
+
+        while (i < n) {
+
+            let wc = self.received_wcs[i as usize].0;
+            if wc.opcode == rdma_binding::ibv_wc_opcode_IBV_WC_RECV {
+                self.release_wr(wc.wr_id as _).unwrap();
+                n_suc = n_suc + (wc.status == rdma_binding::ibv_wc_status_IBV_WC_SUCCESS) as u16;
+                n_fail = n_fail + (wc.status != rdma_binding::ibv_wc_status_IBV_WC_SUCCESS) as u16;
+            }
+
+            i = i + 1;
+        }
+
+        unsafe {
+            *self.n_completed_work.get() = 0;
+            *self.first_unprocessed_wc_index.get() = 0;
+        }
+
+        (n_suc, n_fail)
+    }
+
     pub fn next_wc(&self) -> Option<&rdma_binding::ibv_wc> {
         unsafe {
             let idx = *self.first_unprocessed_wc_index.get();
@@ -192,11 +220,6 @@ impl RdmaWorkManager {
         comp_channel: Sendable<rdma_binding::ibv_comp_channel>,
         cq: Sendable<rdma_binding::ibv_cq>,
     ) -> Result<(), WorkManagerError> {
-        unsafe {
-            *self.n_completed_work.get() = 0;
-            *self.first_unprocessed_wc_index.get() = 0;
-        }
-
         let poll = |label: &str| -> Result<u16, WorkManagerError> {
             unsafe {
                 debug_println_verbose!("poll_completed_works: {}", label);
@@ -214,40 +237,43 @@ impl RdmaWorkManager {
                 Ok(num_polled as u16)
             }
         };
+        let mut n = 0u16;
 
         unsafe {
-            *self.n_completed_work.get() = poll("first poll")?;
-        }
-        if unsafe { *self.n_completed_work.get() } > 0 {
-            return Ok(());
-        }
+            n = poll("initial poll")?;
 
-        self.request_for_notification(cq.as_ptr())?;
+            if n == 0 {
+                // if empty, request notification and block
+                debug_println_verbose!("poll_completed_works: got 0 WC. calling ibv_req_notify_cq_ex()...");
+                rdma_binding::ibv_req_notify_cq_ex(cq.as_ptr(), 0);
+                n = poll("next poll right after requesting notification to handle race condition")?;
+                if n == 0 {
+                    // now it is safe to block
+                    *self.n_completed_work.get() = 0;
+                    *self.first_unprocessed_wc_index.get() = 0;
+                    let mut _cq: *mut rdma_binding::ibv_cq = ptr::null_mut();
+                    let mut _ctx: *mut std::ffi::c_void = ptr::null_mut();
+                    debug_println_verbose!("poll_completed_works: calling ibv_get_cq_event (Blocking)");
+                    rdma_binding::ibv_get_cq_event(comp_channel.as_ptr(), &mut _cq, &mut _ctx);
+                    debug_println_verbose!("[SUCCESS] ibv_get_cq_event (Unblocked)");
+                    n = poll("second poll after getting notification")?;
+                    debug_println_verbose!("[SUCCESS] got {} WC", n);
+                }
+
+            }
+        }
 
         unsafe {
-            *self.n_completed_work.get() = poll("second poll")?;
-        }
-        if unsafe { *self.n_completed_work.get() } > 0 {
-            return Ok(());
-        }
-
-        unsafe {
-            debug_println_verbose!("poll_completed_works: calling ibv_get_cq_event");
-            let mut _cq: *mut rdma_binding::ibv_cq = ptr::null_mut();
-            let mut _ctx: *mut std::ffi::c_void = ptr::null_mut();
-            rdma_binding::ibv_get_cq_event(comp_channel.as_ptr(), &mut _cq, &mut _ctx);
-            debug_println_verbose!("[SUCCESS] ibv_get_cq_event");
-        }
-
-        unsafe {
-            *self.n_completed_work.get() = poll("final poll")?;
-            rdma_binding::ibv_ack_cq_events(cq.as_ptr(), *self.n_completed_work.get() as c_uint);
+            *self.n_completed_work.get() = n;
+            *self.first_unprocessed_wc_index.get() = 0;
+            debug_println_verbose!("poll_completed_works: ACK {} WC", n);
+            rdma_binding::ibv_ack_cq_events(cq.as_ptr(), n as c_uint);
         }
 
         Ok(())
     }
 
-    fn request_for_notification(
+    pub fn request_for_notification(
         &self,
         cq: *mut rdma_binding::ibv_cq,
     ) -> Result<(), WorkManagerError> {

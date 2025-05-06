@@ -232,13 +232,16 @@ pub mod rdma_initiator {
                     ));
                 }
             }
+            debug_println!("initial notification request");
+            let rwm = RdmaWorkManager::new(MAX_WR as u16);
+            rwm.request_for_notification(ctx.cq).expect("PANIC: when firing initial WC notification request");
 
             debug_println!("The client is connected successfully");
             Ok(Self {
                 server_sockaddr,
                 capsule_context: CapsuleContext::new(pd_ptr, MAX_WR as u16).unwrap(),
                 ctx,
-                rwm: RdmaWorkManager::new(MAX_WR as u16),
+                rwm,
                 wr_id_to_buffer: std::iter::repeat_with(|| None)
                     .take(MAX_WR)
                     .collect(),
@@ -282,12 +285,14 @@ pub mod rdma_initiator {
 
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
+            println!("post_rcv_resp_work wr_id={}", wr_id);
             self.rwm
                 .post_rcv_resp_work(wr_id, self.ctx.get_sendable_qp(), resp_sge)
                 .unwrap();
 
             // Then send the request
             let req_sge = self.capsule_context.get_req_sge(wr_id as usize).unwrap();
+            println!("post_send_request_work wr_id={}", wr_id);
             self.rwm
                 .post_send_request_work(wr_id, self.ctx.get_sendable_qp(), req_sge)
                 .map_err(|_| {
@@ -372,41 +377,11 @@ pub mod rdma_initiator {
             Ok((n_successes, n_failed))
         }
 
-        pub fn poll_single_completion(&mut self) -> Result<Option<bool>, RdmaTransportError> {
+        pub fn poll_completions_reset(&mut self) -> Result<(u16, u16), RdmaTransportError> {
             self.rwm
                 .poll_completed_works(self.ctx.get_sendable_io_comp_channel(), self.ctx.get_sendable_cq())
                 .unwrap();
-
-            let ret = {
-                if let Some(wc) = self.rwm.next_wc() {
-                    let wr_id = wc.wr_id.clone();
-                    let op_code = wc.opcode.clone();
-                    let status = {
-                        if op_code == rdma_binding::ibv_wc_opcode_IBV_WC_RECV {
-                            self.rwm.release_wr(wr_id as u16).unwrap();
-                            if wc.status != rdma_binding::ibv_wc_status_IBV_WC_SUCCESS {
-                                debug_println!(
-                                "[UNSUCCESSFUL] wc {} is not success: opcode={}, status={}",
-                                wc.wr_id,
-                                wc.opcode,
-                                wc.status
-                            );
-                                Some(false)
-                            } else {
-                                Some(true)
-                            }
-                        } else {
-                            None
-                        }
-                    };
-
-                    status
-                } else {
-                    None
-                }
-            };
-
-            Ok(ret)
+            Ok(self.rwm.reset_wc())
         }
 
         pub fn get_pd(&mut self) -> Result<*mut rdma_binding::ibv_pd, RdmaTransportError> {

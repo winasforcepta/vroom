@@ -10,6 +10,7 @@ use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::{fmt, thread};
+use vroom::debug_println_verbose;
 use vroom::rdma::rdma_common::rdma_binding;
 use vroom::rdma::rdma_initiator::rdma_initiator::RdmaInitiator;
 
@@ -73,49 +74,6 @@ struct Args {
     ns_size_bytes: u64,
 }
 
-pub struct Semaphore {
-    permits: AtomicUsize,
-}
-
-impl Semaphore {
-    pub fn new(initial_permits: usize) -> Self {
-        Self {
-            permits: AtomicUsize::new(initial_permits),
-        }
-    }
-
-    pub fn acquire(&self) {
-        loop {
-            let available = self.permits.load(Ordering::Acquire);
-            if available > 0 {
-                if self.permits
-                    .compare_exchange(available, available - 1, Ordering::AcqRel, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    break;
-                }
-            } else {
-                thread::yield_now();
-            }
-        }
-    }
-
-    pub fn try_acquire(&self) -> bool {
-        let available = self.permits.load(Ordering::Acquire);
-        if available > 0 {
-            self.permits
-                .compare_exchange(available, available - 1, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-        } else {
-            false
-        }
-    }
-
-    pub fn release(&self, n: usize) {
-        self.permits.fetch_add(n, Ordering::Release);
-    }
-}
-
 fn generate_lba_offsets(ns_size_bytes: u64, block_size: u64, random: bool) -> Vec<u64> {
     let num_blocks = ns_size_bytes / block_size;
     let mut rng = thread_rng();
@@ -163,7 +121,7 @@ fn print_result(bandwidth: f64, io_per_sec: f64, latency_min: u64, latency_perce
 
 fn main() {
     let args = Args::parse();
-    let semaphore = Semaphore::new(args.queue_depth as usize);
+    let mut quota = args.queue_depth as usize;
     let mut per_io_time_tracker: VecDeque<Instant> = VecDeque::with_capacity(args.queue_depth as usize);
     let mut hist: Histogram<u64> = Histogram::new_with_bounds(1u64, 300_000_000_000u64, 3).unwrap();
 
@@ -220,7 +178,8 @@ fn main() {
     println!("benchmark is starting...");
     while total < duration {
         let before = Instant::now();
-        while semaphore.try_acquire() {
+        while quota > 0 {
+            quota -= 1;
             let lba = lbas[step];
             let is_write_mode = io_write_mode[step];
             match is_write_mode {
@@ -241,16 +200,15 @@ fn main() {
             step = (step + 1) % lbas.len();
         }
 
-        if let Some(_completion) = transport.poll_single_completion().unwrap() {
-            let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
-            if latency >= 1_000_000 {
-                println!("[suspicious] high latency I/O {} ns", latency);
-            }
-            hist.record(latency.max(1)).unwrap();
-            total_io += 1;
-            semaphore.release(1);
-        }
+        let (ns, nf) = transport.poll_completions_reset().unwrap();
+        debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
+        total_io += (ns + nf) as usize;
 
+        for _i in 0..(ns + nf) {
+            let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
+            hist.record(latency.max(1)).unwrap() // avoid 0
+        }
+        quota = quota + (ns + nf) as usize;
         let elapsed = before.elapsed();
         total += elapsed;
     }
