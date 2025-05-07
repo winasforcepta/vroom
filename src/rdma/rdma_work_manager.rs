@@ -273,6 +273,43 @@ impl RdmaWorkManager {
         Ok(())
     }
 
+    pub fn poll_completed_works_busy_looping(
+        &self,
+        cq: Sendable<rdma_binding::ibv_cq>,
+    ) -> Result<(), WorkManagerError> {
+        let poll = |label: &str| -> Result<u16, WorkManagerError> {
+            unsafe {
+                debug_println_verbose!("poll_completed_works: {}", label);
+                let num_polled = rdma_binding::ibv_poll_cq_ex(
+                    cq.as_ptr(),
+                    MAX_COMPLETION_EVENT as c_int,
+                    self.received_wcs.as_ptr() as *mut rdma_binding::ibv_wc,
+                );
+                if num_polled < 0 {
+                    return Err(WorkManagerError::OperationFailed(format!(
+                        "ibv_poll_cq_ex returns < 0: {}",
+                        num_polled
+                    )));
+                }
+                Ok(num_polled as u16)
+            }
+        };
+        let mut n = 0u16;
+
+        while n == 0 {
+            n = poll("busy looping poll")?;
+        }
+
+        unsafe {
+            *self.n_completed_work.get() = n;
+            *self.first_unprocessed_wc_index.get() = 0;
+            debug_println_verbose!("poll_completed_works: ACK {} WC", n);
+            rdma_binding::ibv_ack_cq_events(cq.as_ptr(), n as c_uint);
+        }
+
+        Ok(())
+    }
+
     pub fn request_for_notification(
         &self,
         cq: *mut rdma_binding::ibv_cq,

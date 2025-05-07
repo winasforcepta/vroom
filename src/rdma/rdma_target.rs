@@ -537,7 +537,7 @@ pub mod rdma_target {
                 debug_println!("[RDMA COMPLETION THREAD] Polling RDMA completion....");
                 let io_comp_channel = client_context.get_sendable_io_comp_channel();
                 let cq = client_context.get_sendable_cq();
-                rdma_work_manager.poll_completed_works(io_comp_channel, cq).unwrap();
+                rdma_work_manager.poll_completed_works_busy_looping(cq).unwrap();
 
                 loop {
                     let completed_wr_id;

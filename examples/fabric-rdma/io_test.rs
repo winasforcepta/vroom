@@ -241,5 +241,6 @@ fn main() {
     let latency_max = hist.max(); // nanoseconds
     print_result(bandwidth, io_per_sec, latency_min, latency_percentile_25,
                  latency_percentile_50, latency_percentile_75, latency_percentile_90,
-                 latency_percentile_99, latency_max)
+                 latency_percentile_99, latency_max);
+    println!("total I/O: {}", total_io);
 }

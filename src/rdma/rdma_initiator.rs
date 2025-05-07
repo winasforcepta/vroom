@@ -350,7 +350,7 @@ pub mod rdma_initiator {
             let mut n_successes = 0;
             let mut n_failed = 0;
             self.rwm
-                .poll_completed_works(self.ctx.get_sendable_io_comp_channel(), self.ctx.get_sendable_cq())
+                .poll_completed_works_busy_looping(self.ctx.get_sendable_cq())
                 .unwrap();
             let mut ret = 0;
 
@@ -379,7 +379,7 @@ pub mod rdma_initiator {
 
         pub fn poll_completions_reset(&mut self) -> Result<(u16, u16), RdmaTransportError> {
             self.rwm
-                .poll_completed_works(self.ctx.get_sendable_io_comp_channel(), self.ctx.get_sendable_cq())
+                .poll_completed_works_busy_looping(self.ctx.get_sendable_cq())
                 .unwrap();
             Ok(self.rwm.reset_wc())
         }
