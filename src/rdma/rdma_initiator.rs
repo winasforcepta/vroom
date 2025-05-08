@@ -208,7 +208,6 @@ pub mod rdma_initiator {
                     ));
                 }
                 debug_println_verbose!("waiting for cm event: RDMA_CM_EVENT_ESTABLISHED");
-                debug_println_verbose!("waiting for cm event: RDMA_CM_EVENT_ROUTE_RESOLVED");
                 let rc = process_cm_event(event_channel_box.as_mut(), &mut cm_event)?;
                 if rc != 0 {
                     return Err(RdmaTransportError::OpFailed(

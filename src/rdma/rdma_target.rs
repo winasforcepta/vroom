@@ -366,10 +366,7 @@ use crate::memory::DmaSlice;
                         }
                         debug_println!("Stop signal has been sent into the thread {}", address_id);
                     }
-                    _ => return Err(RdmaTransportError::OpFailedEx {
-                        source: io::Error::last_os_error(),
-                        message: format!("Expecting RDMA_CM_EVENT_CONNECT_REQUEST but got a unexpected event: {}", get_rdma_event_type_string(e_type)),
-                    })
+                    _ => continue
                 }
             }
 
