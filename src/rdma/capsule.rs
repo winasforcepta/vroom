@@ -142,7 +142,7 @@ pub mod capsule {
 
                 *self.resp_capsule_mr.get() = unsafe {
                     let addr = self.resp_capsules.as_ptr() as *mut c_void;
-                    let length = self.resp_capsules.len() * mem::size_of::<NVMeCapsule>();
+                    let length = self.resp_capsules.len() * mem::size_of::<NVMeResponseCapsule>();
                     rdma_binding::ibv_reg_mr(
                         pd,
                         addr,
