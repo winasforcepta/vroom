@@ -4,8 +4,8 @@ pub mod rdma_binding {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 pub mod rdma_common {
-    use crate::rdma::buffer_manager::{BufferManagerIdx, ThreadSafeDmaHandle};
-    use crate::rdma::capsule::capsule::CapsuleContext;
+    use core::slice::SlicePattern;
+    use crate::rdma::buffer_manager::{BufferManagerIdx};
     use crate::rdma::rdma_common::rdma_binding;
     use std::any::Any;
     use std::net::Ipv4Addr;
@@ -230,10 +230,6 @@ pub mod rdma_common {
                 }
             }
 
-            let req_capsule_ctx = CapsuleContext::new(pd_ptr, max_wr).map_err(|_| {
-                RdmaTransportError::OpFailed("failed to construct IO request context".into())
-            })?;
-
             Ok(Self {
                 _name: format!("Client {}", Self::_get_client_address(cm_id_ptr)),
                 cm_id: cm_id_ptr,
@@ -281,6 +277,7 @@ pub mod rdma_common {
         }
 
         pub fn set_wr_id_buffer_idx(&self, wr_id: usize, buffer_idx: BufferManagerIdx) {
+            debug_println_verbose!("[DEBUG] setting wrid_to_buffer_idx[{}] = {}", wr_id, buffer_idx);
             unsafe {
                 (*self.wrid_to_buffer_idx.get())[wr_id] = Some(buffer_idx);
             }
@@ -290,19 +287,23 @@ pub mod rdma_common {
             &self,
             idx: usize,
         ) -> Result<BufferManagerIdx, RdmaTransportError> {
-            unsafe {
-                assert!((*self.wrid_to_buffer_idx.get())[idx].is_some());
-                Ok((*self.wrid_to_buffer_idx.get())[idx].unwrap())
-            }
+            debug_println_verbose!("[DEBUG] getting wrid_to_buffer_idx[{}]", idx);
+            let wrid_ptr = self.wrid_to_buffer_idx.get();
+            assert!(!wrid_ptr.is_null(), "Pointer is null");
 
+            unsafe {
+                assert!(wrid_ptr.as_ref().unwrap().as_slice()[idx].is_some(), "get_remote_op_buffer({}) is None", idx);
+                debug_println_verbose!("[DEBUG] getting wrid_to_buffer_idx[{}] = {}", idx, wrid_ptr.as_ref().unwrap().as_slice()[idx].unwrap().clone());
+                Ok(wrid_ptr.as_ref().unwrap().as_slice()[idx].unwrap().clone())
+            }
         }
 
         pub fn free_remote_op_buffer(
             &self,
             idx: usize,
         ) -> Result<(), RdmaTransportError> {
+            debug_println_verbose!("[DEBUG] free wrid_to_buffer_idx[{}]", idx);
             unsafe {
-                assert!((*self.wrid_to_buffer_idx.get())[idx].is_some());
                 (*self.wrid_to_buffer_idx.get())[idx] = None;
             }
             Ok(())

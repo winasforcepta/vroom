@@ -1,3 +1,4 @@
+#![feature(slice_pattern)]
 #![cfg_attr(target_arch = "aarch64", feature(stdarch_arm_hints))]
 extern crate core;
 

@@ -102,47 +102,59 @@ pub mod capsule {
         cnt: u16,
         pub req_capsules: Vec<NVMeCapsule>,
         resp_capsules: Vec<UnsafeCell<NVMeResponseCapsule>>, // allow unsafe modification
-        req_capsule_mr: *mut rdma_binding::ibv_mr,
-        resp_capsule_mr: *mut rdma_binding::ibv_mr,
+        req_capsule_mr: UnsafeCell<*mut rdma_binding::ibv_mr>,
+        resp_capsule_mr: UnsafeCell<*mut rdma_binding::ibv_mr>,
     }
     unsafe impl Send for CapsuleContext {}
     unsafe impl Sync for CapsuleContext {}
 
     impl CapsuleContext {
-        pub fn new(pd: *mut ibv_pd, n: u16) -> Result<Self, RDMACapsuleError> {
+        pub fn new(n: u16) -> Result<Self, RDMACapsuleError> {
             let mut req_capsules = vec![NVMeCapsule::zeroed(); n as usize];
             let mut resp_capsules = (0..n)
                 .map(|_| UnsafeCell::new(NVMeResponseCapsule::zeroed()))
                 .collect::<Vec<_>>();
-            let mut req_capsule_mr = unsafe {
-                let addr = req_capsules.as_mut_ptr() as *mut c_void;
-                let length = req_capsules.len() * mem::size_of::<NVMeCapsule>();
-                rdma_binding::ibv_reg_mr(
-                    pd,
-                    addr,
-                    length,
-                    rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE as c_int,
-                )
-            };
-            let mut resp_capsule_mr = unsafe {
-                let addr = resp_capsules.as_mut_ptr() as *mut c_void;
-                let length = resp_capsules.len() * mem::size_of::<NVMeResponseCapsule>();
-                rdma_binding::ibv_reg_mr(
-                    pd,
-                    addr,
-                    length,
-                    rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE as c_int,
-                )
-            };
 
 
             Ok(Self {
                 cnt: n,
                 req_capsules,
                 resp_capsules,
-                req_capsule_mr,
-                resp_capsule_mr,
+                req_capsule_mr: UnsafeCell::new(ptr::null_mut()),
+                resp_capsule_mr: UnsafeCell::new(ptr::null_mut()),
             })
+        }
+
+        pub fn register_mr(&self, pd: *mut ibv_pd) -> Result<(), RDMACapsuleError> {
+            unsafe {
+                *self.req_capsule_mr.get() = unsafe {
+                    let addr = self.req_capsules.as_ptr() as *mut c_void;
+                    let length = self.req_capsules.len() * mem::size_of::<NVMeCapsule>();
+                    rdma_binding::ibv_reg_mr(
+                        pd,
+                        addr,
+                        length,
+                        (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
+                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE
+                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ) as c_int,
+                    )
+                };
+
+                *self.resp_capsule_mr.get() = unsafe {
+                    let addr = self.resp_capsules.as_ptr() as *mut c_void;
+                    let length = self.resp_capsules.len() * mem::size_of::<NVMeCapsule>();
+                    rdma_binding::ibv_reg_mr(
+                        pd,
+                        addr,
+                        length,
+                        (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
+                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE
+                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ) as c_int,
+                    )
+                };
+            }
+
+            Ok(())
         }
 
         pub fn get_req_sge(
@@ -150,10 +162,12 @@ pub mod capsule {
             idx: usize,
         ) -> Result<rdma_binding::ibv_sge, RDMACapsuleError> {
             assert!(idx < self.cnt as usize);
-            assert!(!self.req_capsule_mr.is_null());
+            assert!(!self.req_capsule_mr.get().is_null());
             let capsule_ptr = unsafe { self.req_capsules.as_ptr().add(idx) } as u64;
+
             let lkey = unsafe {
-                (*(self.req_capsule_mr)).lkey.clone()
+                let mr_ptr = *self.req_capsule_mr.get();
+                (*mr_ptr).lkey.clone()
             };
 
             Ok(rdma_binding::ibv_sge {
@@ -168,10 +182,11 @@ pub mod capsule {
             idx: usize,
         ) -> Result<rdma_binding::ibv_sge, RDMACapsuleError> {
             assert!(idx < self.cnt as usize);
-            assert!(!self.resp_capsule_mr.is_null());
+            assert!(!self.resp_capsule_mr.get().is_null());
             let capsule_ptr = unsafe { self.resp_capsules.as_ptr().add(idx) } as u64;
             let lkey = unsafe {
-                (*(self.resp_capsule_mr)).lkey.clone()
+                let mr_ptr = *self.resp_capsule_mr.get();
+                (*mr_ptr).lkey.clone()
             };
 
             Ok(rdma_binding::ibv_sge {

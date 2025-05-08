@@ -235,11 +235,13 @@ pub mod rdma_initiator {
             debug_println!("initial notification request");
             let rwm = RdmaWorkManager::new(MAX_WR as u16);
             rwm.request_for_notification(ctx.cq).expect("PANIC: when firing initial WC notification request");
+            let capsule_context = CapsuleContext::new(MAX_WR as u16).unwrap();
+            capsule_context.register_mr(pd_ptr).expect("PANIC: Failed to register capsule MR");
 
             debug_println!("The client is connected successfully");
             Ok(Self {
                 server_sockaddr,
-                capsule_context: CapsuleContext::new(pd_ptr, MAX_WR as u16).unwrap(),
+                capsule_context,
                 ctx,
                 rwm,
                 wr_id_to_buffer: std::iter::repeat_with(|| None)
