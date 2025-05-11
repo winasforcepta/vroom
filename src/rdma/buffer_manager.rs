@@ -81,6 +81,7 @@ impl BufferManager {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn get_memory_info(&self, idx: BufferManagerIdx) -> (*mut u8, PhysicalAddrType, usize, u32) {
         assert!(idx < self.n_blocks, "get_dma_slice out of index");
         let dma = unsafe { self.buffer.to_dma() };
@@ -90,6 +91,7 @@ impl BufferManager {
         (virt, phys, self.block_size, lkey)
     }
 
+    #[inline(always)]
     pub fn allocate(&self) -> Option<(BufferManagerIdx, *mut rdma_binding::ibv_mr)> {
         assert!(!self.mr.load(Ordering::SeqCst).is_null(), "RDMA MR is not registered yet");
 
@@ -103,14 +105,17 @@ impl BufferManager {
 
     }
 
+    #[inline(always)]
     pub fn free(&self, idx: BufferManagerIdx) {
         self.free_idx_list.push(idx).unwrap();
     }
 
+    #[inline(always)]
     pub fn get_base_dma(&self) -> ThreadSafeDmaHandle {
         self.buffer
     }
 
+    #[inline(always)]
     pub fn get_lkey(&self) -> Option<u32> {
         if self.mr.load(Ordering::SeqCst).is_null() {
             return None

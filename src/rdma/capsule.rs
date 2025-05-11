@@ -134,9 +134,7 @@ pub mod capsule {
                         pd,
                         addr,
                         length,
-                        (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
-                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE
-                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ) as c_int,
+                        (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE) as c_int,
                     )
                 };
 
@@ -147,9 +145,7 @@ pub mod capsule {
                         pd,
                         addr,
                         length,
-                        (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
-                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE
-                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ) as c_int,
+                        (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE) as c_int,
                     )
                 };
             }
@@ -162,7 +158,6 @@ pub mod capsule {
             idx: usize,
         ) -> Result<rdma_binding::ibv_sge, RDMACapsuleError> {
             assert!(idx < self.cnt as usize);
-            assert!(!self.req_capsule_mr.get().is_null());
             let capsule_ptr = unsafe { self.req_capsules.as_ptr().add(idx) } as u64;
 
             let lkey = unsafe {
@@ -182,7 +177,6 @@ pub mod capsule {
             idx: usize,
         ) -> Result<rdma_binding::ibv_sge, RDMACapsuleError> {
             assert!(idx < self.cnt as usize);
-            assert!(!self.resp_capsule_mr.get().is_null());
             let capsule_ptr = unsafe { self.resp_capsules.as_ptr().add(idx) } as u64;
             let lkey = unsafe {
                 let mr_ptr = *self.resp_capsule_mr.get();

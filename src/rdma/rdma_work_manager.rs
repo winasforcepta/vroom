@@ -47,10 +47,12 @@ impl WrIdAllocator {
         Self { free_list, max_wr_id }
     }
 
+    #[inline(always)]
     fn allocate_wr_id(&self) -> Option<u16> {
         self.free_list.pop()
     }
 
+    #[inline(always)]
     fn release_wr_id(&self, wr_id: u16) -> Result<(), WorkManagerError> {
         if self.free_list.len() == self.max_wr_id as usize {
             return Err(WorkManagerError::FailedWorkIDFree);
@@ -104,14 +106,17 @@ impl RdmaWorkManager {
         }
     }
 
+    #[inline(always)]
     pub fn allocate_wr_id(&self) -> Option<u16> {
         self.wr_id_allocator.allocate_wr_id()
     }
 
+    #[inline(always)]
     pub fn release_wr(&self, wr_id: u16) -> Result<(), WorkManagerError> {
         self.wr_id_allocator.release_wr_id(wr_id)
     }
 
+    #[inline(always)]
     pub fn any_inflight_wr(&self) -> bool {
         self.wr_id_allocator.any_inflight_wr()
     }
@@ -148,6 +153,7 @@ impl RdmaWorkManager {
         (n_suc, n_fail)
     }
 
+    #[inline(always)]
     pub fn next_wc(&self) -> Option<&rdma_binding::ibv_wc> {
         unsafe {
             let idx = *self.first_unprocessed_wc_index.get();
@@ -273,6 +279,7 @@ impl RdmaWorkManager {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn poll_completed_works_busy_looping(
         &self,
         cq: Sendable<rdma_binding::ibv_cq>,
@@ -310,15 +317,16 @@ impl RdmaWorkManager {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn try_poll_completed_works(
         &self,
-        cq: Sendable<rdma_binding::ibv_cq>,
+        cq: &Sendable<rdma_binding::ibv_cq>,
     ) -> Result<bool, WorkManagerError> {
         let poll = |label: &str| -> Result<u16, WorkManagerError> {
             unsafe {
                 // debug_println_verbose!("poll_completed_works: {}", label);
                 let num_polled = rdma_binding::ibv_poll_cq_ex(
-                    cq.as_ptr(),
+                    (*cq).as_ptr(),
                     MAX_COMPLETION_EVENT as c_int,
                     self.received_wcs.as_ptr() as *mut rdma_binding::ibv_wc,
                 );
@@ -342,7 +350,7 @@ impl RdmaWorkManager {
             *self.n_completed_work.get() = n;
             *self.first_unprocessed_wc_index.get() = 0;
             debug_println_verbose!("poll_completed_works: ACK {} WC", n);
-            rdma_binding::ibv_ack_cq_events(cq.as_ptr(), n as c_uint);
+            rdma_binding::ibv_ack_cq_events((*cq).as_ptr(), n as c_uint);
         }
 
         Ok(true)
@@ -360,10 +368,11 @@ impl RdmaWorkManager {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn post_rcv_req_work(
         &self,
         wr_id: u16,
-        qp: Sendable<rdma_binding::ibv_qp>,
+        qp: &Sendable<rdma_binding::ibv_qp>,
         mut sge: rdma_binding::ibv_sge,
     ) -> Result<u16, WorkManagerError> {
         let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
@@ -376,7 +385,7 @@ impl RdmaWorkManager {
         };
 
         unsafe {
-            let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
+            let ret = rdma_binding::ibv_post_recv_ex((*qp).as_ptr(), &mut wr, &mut bad_client_recv_wr);
             if ret != 0 {
                 return Err(WorkManagerError::OperationFailed(
                     "Failed to post rcv work".into(),
@@ -389,10 +398,11 @@ impl RdmaWorkManager {
         Ok(wr_id)
     }
 
+    #[inline(always)]
     pub fn post_send_response_work(
         &self,
         wr_id: u16,
-        qp: Sendable<rdma_binding::ibv_qp>,
+        qp: &Sendable<rdma_binding::ibv_qp>,
         mut sge: rdma_binding::ibv_sge,
     ) -> Result<(), WorkManagerError> {
         let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
@@ -415,7 +425,7 @@ impl RdmaWorkManager {
                     "post_send_response_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
-            let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
+            let ret = rdma_binding::ibv_post_send_ex((*qp).as_ptr(), &mut wr, &mut bad_client_send_wr);
             if ret != 0 {
                 return Err(WorkManagerError::OperationFailed(
                     "Failed to post send response work".into(),
@@ -432,10 +442,11 @@ impl RdmaWorkManager {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn post_rmt_work(
         &self,
         wr_id: u16,
-        qp: Sendable<rdma_binding::ibv_qp>,
+        qp: &Sendable<rdma_binding::ibv_qp>,
         mut sge: rdma_binding::ibv_sge,
         remote_addr: u64,
         remote_rkey: u32,
@@ -462,7 +473,7 @@ impl RdmaWorkManager {
         let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
         unsafe {
             let ret =
-                rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut remote_wr, &mut bad_client_send_wr);
+                rdma_binding::ibv_post_send_ex((*qp).as_ptr(), &mut remote_wr, &mut bad_client_send_wr);
             if ret != 0 {
                 return Err(WorkManagerError::OperationFailed(format!(
                     "ibv_post_send_ex failed with error code: {}",
@@ -476,6 +487,7 @@ impl RdmaWorkManager {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn post_rcv_resp_work(
         &self,
         wr_id: u16,
@@ -506,6 +518,7 @@ impl RdmaWorkManager {
         Ok(wr_id)
     }
 
+    #[inline(always)]
     pub fn post_send_request_work(
         &self,
         wr_id: u16,
