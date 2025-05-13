@@ -45,6 +45,7 @@ impl BufferManager {
         let buffer: Dma<u8> = Dma::allocate(total_bytes).unwrap();
         let thread_safe_dma = ThreadSafeDmaHandle::from(&buffer);
         for i in (0..block_count).rev() { free_idx_list.push(i).unwrap(); }
+        #[cfg(any(debug_mode, debug_mode_verbose))]
         debug_println_verbose!("[buffer manager] total_bytes = {} block_size_bytes = {} block count = {}", total_bytes, block_size_bytes, block_count);
         Ok(BufferManager {
             total_size: total_bytes,
@@ -113,9 +114,11 @@ impl BufferManager {
         assert!(!self.mr[client_idx].load(Ordering::SeqCst).is_null(), "RDMA MR is not registered yet");
 
         if let Some(idx) = self.free_idx_list.pop() {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[Buffer manager] block {} is allocated", idx);
             Some((idx, self.mr[client_idx].load(Ordering::SeqCst)))
         } else {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("Failed to pop free_idx_list");
             None
         }
@@ -181,6 +184,7 @@ pub struct ThreadSafeDmaHandle {
 
 impl From<&Dma<u8>> for ThreadSafeDmaHandle {
     fn from(dma: &Dma<u8>) -> Self {
+        #[cfg(any(debug_mode, debug_mode_verbose))]
         debug_println_verbose!("[DEBUG TRANSFORM DMA -> ThreadSafeDmaHandle] virt: {}, phy: {}, size: {}", dma.virt as u64, dma.phys as u64, dma.size);
         ThreadSafeDmaHandle {
             virt: dma.virt,
@@ -192,6 +196,7 @@ impl From<&Dma<u8>> for ThreadSafeDmaHandle {
 
 impl ThreadSafeDmaHandle {
     pub unsafe fn to_dma(&self) -> Dma<u8> {
+        #[cfg(any(debug_mode, debug_mode_verbose))]
         debug_println_verbose!("[DEBUG TRANSFORM ThreadSafeDmaHandle -> DMA] virt: {}, phy: {}, size: {}", self.virt as u64, self.phys as u64, self.size);
         Dma::from_raw_parts(self.virt, self.phys, self.size)
     }

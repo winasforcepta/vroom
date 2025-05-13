@@ -1,5 +1,6 @@
 use tracing::Level;
 use crate::rdma::rdma_common::rdma_binding;
+#[cfg(any(debug_mode, debug_mode_verbose))]
 use crate::debug_println_verbose;
 use libc::{c_int, c_uint};
 use std::cell::UnsafeCell;
@@ -267,6 +268,7 @@ impl RdmaWorkManager {
         let _ = span.enter();
         let poll = |label: &str| -> Result<u16, WorkManagerError> {
             unsafe {
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("poll_completed_works: {}", label);
                 let num_polled = rdma_binding::ibv_poll_cq_ex(
                     cq.as_ptr(),
@@ -289,6 +291,7 @@ impl RdmaWorkManager {
 
             if n == 0 {
                 // if empty, request notification and block
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("poll_completed_works: got 0 WC. calling ibv_req_notify_cq_ex()...");
                 rdma_binding::ibv_req_notify_cq_ex(cq.as_ptr(), 0);
                 n = poll("next poll right after requesting notification to handle race condition")?;
@@ -298,10 +301,13 @@ impl RdmaWorkManager {
                     *self.first_unprocessed_wc_index.get() = 0;
                     let mut _cq: *mut rdma_binding::ibv_cq = ptr::null_mut();
                     let mut _ctx: *mut std::ffi::c_void = ptr::null_mut();
+                    #[cfg(any(debug_mode, debug_mode_verbose))]
                     debug_println_verbose!("poll_completed_works: calling ibv_get_cq_event (Blocking)");
                     rdma_binding::ibv_get_cq_event(comp_channel.as_ptr(), &mut _cq, &mut _ctx);
+                    #[cfg(any(debug_mode, debug_mode_verbose))]
                     debug_println_verbose!("[SUCCESS] ibv_get_cq_event (Unblocked)");
                     n = poll("second poll after getting notification")?;
+                    #[cfg(any(debug_mode, debug_mode_verbose))]
                     debug_println_verbose!("[SUCCESS] got {} WC", n);
                 }
 
@@ -311,6 +317,7 @@ impl RdmaWorkManager {
         unsafe {
             *self.n_completed_work.get() = n;
             *self.first_unprocessed_wc_index.get() = 0;
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("poll_completed_works: ACK {} WC", n);
             rdma_binding::ibv_ack_cq_events(cq.as_ptr(), n as c_uint);
         }
@@ -329,7 +336,6 @@ impl RdmaWorkManager {
         let _ = span.enter();
         let poll = |label: &str| -> Result<u16, WorkManagerError> {
             unsafe {
-                // debug_println_verbose!("poll_completed_works: {}", label);
                 let num_polled = rdma_binding::ibv_poll_cq_ex(
                     cq.as_ptr(),
                     MAX_COMPLETION_EVENT as c_int,
@@ -353,6 +359,7 @@ impl RdmaWorkManager {
         unsafe {
             *self.n_completed_work.get() = n;
             *self.first_unprocessed_wc_index.get() = 0;
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("poll_completed_works: ACK {} WC", n);
             rdma_binding::ibv_ack_cq_events(cq.as_ptr(), n as c_uint);
         }
@@ -371,7 +378,6 @@ impl RdmaWorkManager {
         let _ = span.enter();
         let poll = |label: &str| -> Result<u16, WorkManagerError> {
             unsafe {
-                // debug_println_verbose!("poll_completed_works: {}", label);
                 let num_polled = rdma_binding::ibv_poll_cq_ex(
                     (*cq).as_ptr(),
                     MAX_COMPLETION_EVENT as c_int,
@@ -396,6 +402,7 @@ impl RdmaWorkManager {
         unsafe {
             *self.n_completed_work.get() = n;
             *self.first_unprocessed_wc_index.get() = 0;
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("poll_completed_works: ACK {} WC", n);
             rdma_binding::ibv_ack_cq_events((*cq).as_ptr(), n as c_uint);
         }
@@ -412,8 +419,10 @@ impl RdmaWorkManager {
         #[cfg(enable_trace)]
         let _ = span.enter();
         unsafe {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("poll_completed_works: calling ibv_req_notify_cq");
             rdma_binding::ibv_req_notify_cq_ex(cq, 0);
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[SUCCESS] ibv_req_notify_cq");
         }
         Ok(())
@@ -480,6 +489,7 @@ impl RdmaWorkManager {
         };
 
         unsafe {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
                     "post_send_response_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
@@ -490,6 +500,7 @@ impl RdmaWorkManager {
                     "Failed to post send response work".into(),
                 ));
             }
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
                     "[SUCCESS] post_send_response_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
@@ -571,6 +582,7 @@ impl RdmaWorkManager {
         };
 
         unsafe {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("post_rcv_resp_work: call ibv_post_recv_ex");
             let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
             if ret != 0 {
@@ -578,6 +590,7 @@ impl RdmaWorkManager {
                     "Failed to post rcv work".into(),
                 ));
             }
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[SUCCESS] post_rcv_resp_work: call ibv_post_recv_ex");
         }
 
@@ -611,6 +624,7 @@ impl RdmaWorkManager {
         };
 
         unsafe {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
                     "post_send_request_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
@@ -622,6 +636,7 @@ impl RdmaWorkManager {
                     ret
                 )));
             }
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
                     "[SUCCESS] post_send_request_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id

@@ -245,6 +245,7 @@ pub mod capsule {
             #[cfg(enable_trace)]
             let _ = span.enter();
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[CAPSULE] get_request_capsule_content: idx = {}", idx);
             let capsule = self.req_capsules.as_slice().get(idx).unwrap();
             Ok((

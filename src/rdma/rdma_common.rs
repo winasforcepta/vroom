@@ -301,6 +301,7 @@ use core::slice::SlicePattern;
             let span = span!(Level::INFO, "ClientRdmaContext.set_wr_id_buffer_idx");
             #[cfg(enable_trace)]
             let _ = span.enter();
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[DEBUG] setting wrid_to_buffer_idx[{}] = {}", wr_id, buffer_idx);
             unsafe {
                 (*self.wrid_to_buffer_idx.get())[wr_id] = Some(buffer_idx);
@@ -316,6 +317,7 @@ use core::slice::SlicePattern;
             #[cfg(enable_trace)]
             let _ = span.enter();
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[DEBUG] getting wrid_to_buffer_idx[{}]", idx);
             let wrid_ptr = self.wrid_to_buffer_idx.get();
             #[cfg(not(disable_assert))]
@@ -324,6 +326,7 @@ use core::slice::SlicePattern;
             unsafe {
                 #[cfg(not(disable_assert))]
                 assert!(wrid_ptr.as_ref().unwrap().as_slice()[idx].is_some(), "get_remote_op_buffer({}) is None", idx);
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("[DEBUG] getting wrid_to_buffer_idx[{}] = {}", idx, wrid_ptr.as_ref().unwrap().as_slice()[idx].unwrap().clone());
                 Ok(wrid_ptr.as_ref().unwrap().as_slice()[idx].unwrap().clone())
             }
@@ -338,6 +341,7 @@ use core::slice::SlicePattern;
             #[cfg(enable_trace)]
             let _ = span.enter();
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[DEBUG] free wrid_to_buffer_idx[{}]", idx);
             unsafe {
                 (*self.wrid_to_buffer_idx.get())[idx] = None;

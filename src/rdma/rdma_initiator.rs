@@ -6,6 +6,7 @@ pub mod rdma_initiator {
         get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError,
     };
     use crate::rdma::rdma_work_manager::RdmaWorkManager;
+    #[cfg(any(debug_mode, debug_mode_verbose))]
     use crate::debug_println_verbose;
     use std::net::Ipv4Addr;
     use std::{mem, ptr};
@@ -70,6 +71,7 @@ pub mod rdma_initiator {
 
             // Prepare the connection
             // Open a channel used to report asynchronous communication event
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("initiator setup: creating event channel...");
             unsafe {
                 let event_channel = rdma_binding::rdma_create_event_channel();
@@ -80,11 +82,13 @@ pub mod rdma_initiator {
                 }
                 event_channel_box = Box::from_raw(event_channel);
             }
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("initiator setup: event channel is created.");
 
             // Create cm_id
             // rdma_cm_id is the connection identifier (like socket) which is used
             // to define an RDMA connection.
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("initiator setup: creating event channel...");
             let mut cm_id_ptr = ptr::null_mut();
             unsafe {
@@ -100,6 +104,7 @@ pub mod rdma_initiator {
                     ));
                 }
             }
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("Initiator setup: CM ID is created.");
 
             // Resolve destination and optional source addresses from IP addresses  to
@@ -109,6 +114,7 @@ pub mod rdma_initiator {
             let s_addr_ptr: *mut rdma_binding::sockaddr_in = &mut server_sockaddr;
             let s_ptr: *mut rdma_binding::sockaddr = s_addr_ptr as *mut rdma_binding::sockaddr;
             unsafe {
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("resolving address");
                 let rc = rdma_binding::rdma_resolve_addr(cm_id_ptr, ptr::null_mut(), s_ptr, RDMA_CM_TIMEOUT);
 
@@ -118,6 +124,7 @@ pub mod rdma_initiator {
                     ));
                 }
 
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("waiting for cm event: RDMA_CM_EVENT_ADDR_RESOLVED");
                 let rc = process_cm_event(event_channel_box.as_mut(), &mut cm_event)?;
                 if rc != 0 {
@@ -129,6 +136,7 @@ pub mod rdma_initiator {
                 }
 
                 let e_type = (*cm_event).event;
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("Got an event {}", get_rdma_event_type_string(e_type));
 
                 if e_type != rdma_binding::rdma_cm_event_type_RDMA_CM_EVENT_ADDR_RESOLVED {
@@ -146,6 +154,7 @@ pub mod rdma_initiator {
             // Resolves an RDMA route to the destination address in order to
             //  establish a connection
             let mut cm_event: *mut rdma_binding::rdma_cm_event = ptr::null_mut();
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("Initiator setup: rdma_resolve_route.");
             unsafe {
                 let rc = rdma_binding::rdma_resolve_route(cm_id_ptr, RDMA_CM_TIMEOUT);
@@ -154,6 +163,7 @@ pub mod rdma_initiator {
                         "Failed to resolve route".parse().unwrap(),
                     ));
                 }
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("waiting for cm event: RDMA_CM_EVENT_ROUTE_RESOLVED");
                 let rc = process_cm_event(event_channel_box.as_mut(), &mut cm_event)?;
                 if rc != 0 {
@@ -164,6 +174,7 @@ pub mod rdma_initiator {
                     ));
                 }
                 let e_type = (*cm_event).event;
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("Got an event {}", get_rdma_event_type_string(e_type));
 
                 if e_type != rdma_binding::rdma_cm_event_type_RDMA_CM_EVENT_ROUTE_RESOLVED {
@@ -182,6 +193,7 @@ pub mod rdma_initiator {
             }
 
             // setup client resources
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("resource setup: Setting up context");
             let mut pd_ptr;
             unsafe {
@@ -194,8 +206,10 @@ pub mod rdma_initiator {
             }
 
             let mut ctx = ClientRdmaContext::new(cm_id_ptr, pd_ptr, queue_depth as u16)?;
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("resource setup: context created.");
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("Trying to connect to the server");
             let mut cm_event: *mut rdma_binding::rdma_cm_event = ptr::null_mut();
             unsafe {
@@ -209,6 +223,7 @@ pub mod rdma_initiator {
                         "Failed to connect to server.".parse().unwrap(),
                     ));
                 }
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("waiting for cm event: RDMA_CM_EVENT_ESTABLISHED");
                 let rc = process_cm_event(event_channel_box.as_mut(), &mut cm_event)?;
                 if rc != 0 {
@@ -217,6 +232,7 @@ pub mod rdma_initiator {
                     ));
                 }
                 let e_type = (*cm_event).event;
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("Got an event {}", get_rdma_event_type_string(e_type));
 
                 if e_type != rdma_binding::rdma_cm_event_type_RDMA_CM_EVENT_ESTABLISHED {
@@ -238,6 +254,7 @@ pub mod rdma_initiator {
             let capsule_context = CapsuleContext::new(queue_depth as u16).unwrap();
             capsule_context.register_mr(pd_ptr).expect("PANIC: Failed to register capsule MR");
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("The client is connected successfully");
             Ok(Self {
                 server_sockaddr,
@@ -275,6 +292,7 @@ pub mod rdma_initiator {
             capsule.data_mr_r_key = rkey;
             capsule.data_mr_length = data_len;
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!(
                 "[capsule data] nvme_add={} data_addr={} data_rkey={}, len={}",
                 nvme_addr,
@@ -321,6 +339,7 @@ pub mod rdma_initiator {
             capsule.data_mr_r_key = rkey;
             capsule.data_mr_length = data_len;
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!(
                 "[capsule data] nvme_add={} data_addr={} data_rkey={}, len={}",
                 nvme_addr,
@@ -360,6 +379,7 @@ pub mod rdma_initiator {
 
                 if op_code == rdma_binding::ibv_wc_opcode_IBV_WC_RECV {
                     if wc.status != rdma_binding::ibv_wc_status_IBV_WC_SUCCESS {
+                        #[cfg(any(debug_mode, debug_mode_verbose))]
                         debug_println!(
                             "[UNSUCCESSFUL] wc {} is not success: opcode={}, status={}",
                             wc.wr_id,
@@ -378,6 +398,7 @@ pub mod rdma_initiator {
         }
 
         pub fn poll_completions_reset(&mut self) -> Result<(u16, u16), RdmaTransportError> {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("Polling completion...");
             self.rwm
                 .try_poll_completed_works(&self.ctx.get_sendable_cq())

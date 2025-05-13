@@ -171,6 +171,7 @@ use crate::memory::DmaSlice;
 
             /*  Open a channel used to report asynchronous communication event */
             unsafe {
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("server setup: creating event channel...");
                 cm_event_channel = rdma_binding::rdma_create_event_channel();
 
@@ -179,12 +180,14 @@ use crate::memory::DmaSlice;
                     return Err(RdmaTransportError::OpFailed(err_msg));
                 }
 
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("server setup: event channel is created.");
             }
 
             // rdma_cm_id is the connection identifier (like socket) which is used
             // to define an RDMA connection.
             unsafe {
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("server setup: creating CM ID...");
                 let rc = rdma_binding::rdma_create_id(
                     cm_event_channel,
@@ -196,10 +199,12 @@ use crate::memory::DmaSlice;
                     err_msg = format!("{}: Failed to CM ID. code: {}", server_name, rc);
                     return Err(RdmaTransportError::OpFailed(err_msg));
                 }
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("server setup: CM ID is created.");
             }
 
             unsafe {
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!(
                     "server setup: binding rdma cm id to the socket credentials..."
                 );
@@ -211,6 +216,7 @@ use crate::memory::DmaSlice;
                     );
                     return Err(RdmaTransportError::OpFailed(err_msg));
                 }
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("server setup: CM ID is bind.");
             }
 
@@ -225,6 +231,7 @@ use crate::memory::DmaSlice;
                 }
             }
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
                 "Server is listening at {}:{}",
                 Ipv4Addr::from(u32::from_be(sockaddr.sin_addr.s_addr)),
@@ -272,6 +279,7 @@ use crate::memory::DmaSlice;
                 let e_type;
                 e_type = (unsafe { *cm_event_ptr }).event;
 
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("Got an event {}", get_rdma_event_type_string(e_type));
 
                 match e_type {
@@ -374,6 +382,7 @@ use crate::memory::DmaSlice;
                         }
                         let cm_id_raw = unsafe { (*cm_event_ptr).id };
                         let address_id = Self::_get_client_address(cm_id_raw);
+                        #[cfg(any(debug_mode, debug_mode_verbose))]
                         debug_println!("Got rdma_cm_event_type_RDMA_CM_EVENT_DISCONNECTED event from {}.", address_id);
                         if let Some(signal) = self.client_thread_signal.get_mut(&address_id) {
                             (*signal).store(false, Ordering::SeqCst);
@@ -389,6 +398,7 @@ use crate::memory::DmaSlice;
                                 })
                             }
                         }
+                        #[cfg(any(debug_mode, debug_mode_verbose))]
                         debug_println!("Stop signal has been sent into the thread {}", address_id);
                         #[cfg(enable_trace)]
                         return Ok((0)); // TODO: Just for benchmark. Need to delete this
@@ -436,14 +446,17 @@ use crate::memory::DmaSlice;
             #[cfg(enable_trace)]
             let _thread_span = thread_span.enter();
             let mut client_context;
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("Received RDMA_CM_EVENT_CONNECT_REQUEST...");
 
             let cm_id_ptr = unsafe {
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("getting cm_id");
                 let cm_id_ptr =(*cm_event.0).id;
                 if cm_id_ptr.is_null() {
                     return Err(RdmaTransportError::OpFailed("Failed to get cm_id".into()));
                 }
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("cm_id is ok");
 
                 cm_id_ptr
@@ -461,6 +474,7 @@ use crate::memory::DmaSlice;
 
             // ACK the event. rdma_ack_cm_event frees the cm_event object, but not object inside of it.
             unsafe {
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("ack cm_event");
                 let rc = rdma_binding::rdma_ack_cm_event(cm_event.0); // Ack the RDMA_CM_EVENT_CONNECT_REQUEST event
                 if rc != 0 {
@@ -470,6 +484,7 @@ use crate::memory::DmaSlice;
                         message: err_msg
                     })
                 }
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("ack cm_event: success");
             }
 
@@ -484,10 +499,12 @@ use crate::memory::DmaSlice;
 
             capsule_context.register_mr(client_context.pd).expect("PANIC: Failed to register capsule MR");
             let mut rdma_work_manager = Arc::from(RdmaWorkManager::new(queue_depth as u16));
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("Handling client thread start.");
             let qp = client_context.get_sendable_qp();
             let cq = client_context.get_sendable_cq();
             // Initially post recv WR. Saturate the queue.
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("Pre-Posting rcv work");
             while let Some(wr_id) = rdma_work_manager.allocate_wr_id() {
                 let sge = capsule_context.get_req_sge(wr_id as usize).unwrap();
@@ -496,6 +513,7 @@ use crate::memory::DmaSlice;
 
             unsafe {
                 while !is_nvme_thread_ready.load(Ordering::SeqCst) {}
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("accept connection");
                 let rc = rdma_binding::rdma_accept(client_context.cm_id, &mut conn_param);
 
@@ -506,9 +524,11 @@ use crate::memory::DmaSlice;
                         message: err_msg
                     })
                 }
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("accept connection: success");
             }
 
+            #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("waiting for : RDMA_CM_EVENT_ESTABLISHED event...");
             let mut client_name;
 
@@ -524,6 +544,7 @@ use crate::memory::DmaSlice;
                 }
 
                 let e_type = (*cm_event).event;
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("Got an event {}", get_rdma_event_type_string(e_type));
 
                 if e_type != rdma_binding::rdma_cm_event_type_RDMA_CM_EVENT_ESTABLISHED {
@@ -558,6 +579,7 @@ use crate::memory::DmaSlice;
                     let mode = rdma_wr.mode.unwrap();
                     match mode {
                         rdma_binding::ibv_wr_opcode_IBV_WR_SEND => {
+                            #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("[RDMA SUBMISSION THREAD] post_send_response_work wr_id={}", rdma_wr.wr_id);
                             #[cfg(enable_trace)]
                             let s = span!(Level::INFO, "Post RDMA SEND");
@@ -566,6 +588,7 @@ use crate::memory::DmaSlice;
                             rdma_work_manager.post_send_response_work(rdma_wr.wr_id, &qp, rdma_wr.sge).unwrap();
                         },
                         rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_WRITE => {
+                            #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("[RDMA SUBMISSION THREAD] post_rmt_work WRITE wr_id={}", rdma_wr.wr_id);
                             #[cfg(enable_trace)]
                             let s = span!(Level::INFO, "Post RDMA WRITE");
@@ -584,7 +607,6 @@ use crate::memory::DmaSlice;
                     }
                 }
 
-                // debug_println!("[RDMA COMPLETION THREAD] Polling RDMA completion....");
                 let any_completion = rdma_work_manager.try_poll_completed_works(&cq).unwrap();
 
                 if !any_completion {
@@ -644,7 +666,6 @@ use crate::memory::DmaSlice;
                         let s = span!(Level::INFO, "On not IBV_WC_SUCCESS");
                         #[cfg(enable_trace)]
                         let _s = s.enter();
-                        // debug_println!("[RDMA COMPLETION THREAD] Releasing wr_id after failed RDMA WC....");
                         rdma_work_manager.release_wr(completed_wr_id as u16).map_err(|_| {
                             RdmaTransportError::OpFailed("failed to release WR".into())
                         })?;
@@ -675,6 +696,7 @@ use crate::memory::DmaSlice;
                                 .get_request_capsule_content(completed_wr_id as usize)
                                 .unwrap();
 
+                            #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println!(
                                 "[RDMA COMPLETION THREAD] received I/O request. cmd_opcode: {}, len: {}",
                                 cmd.opcode,
@@ -729,6 +751,7 @@ use crate::memory::DmaSlice;
                                 let s = span!(Level::INFO, "On (response capsule) IBV_WC_SEND: release resource");
                                 #[cfg(enable_trace)]
                                 let _s = s.enter();
+                                #[cfg(any(debug_mode, debug_mode_verbose))]
                                 debug_println!("[RDMA COMPLETION THREAD] Response is sent for wr_id: {}", completed_wr_id);
                                 let buffer_idx = client_context.get_remote_op_buffer(completed_wr_id as usize)?;
                                 buffer_manager.free(buffer_idx);
@@ -736,6 +759,7 @@ use crate::memory::DmaSlice;
                                 rdma_work_manager.release_wr(completed_wr_id as u16).unwrap();
                                 let new_wr_id = rdma_work_manager.allocate_wr_id().unwrap();
                                 let sge = capsule_context.get_req_sge(new_wr_id as usize).unwrap();
+                                #[cfg(any(debug_mode, debug_mode_verbose))]
                                 debug_println_verbose!("[RDMA COMPLETION THREAD] Posting another receive request with wr_id={}", completed_wr_id);
                                 rdma_work_manager.post_rcv_req_work(new_wr_id, &qp, sge).unwrap();
                             }
@@ -809,6 +833,7 @@ use crate::memory::DmaSlice;
                     c_id_to_offset_map[c_id as usize] = Some(start_offset);
 
                     unsafe {
+                        #[cfg(any(debug_mode, debug_mode_verbose))]
                         debug_println_verbose!("[NVMe Device Thread] Submit I/O {} command: bytes_offset: {}, lba: {}, size: {}", if write { "WRITE" } else { "READ" }, start_offset, lba, size);
                         inflight_cmd_cnt[c_id as usize].0 = nvme_queue_pair.submit_io_with_cid(
                             &base_dma.to_dma().slice(start_offset..start_offset + size),
@@ -816,6 +841,7 @@ use crate::memory::DmaSlice;
                             write,
                             c_id
                         );
+                        #[cfg(any(debug_mode, debug_mode_verbose))]
                         debug_println_verbose!("[NVMe Device Thread] submitted {} commands", inflight_cmd_cnt[c_id as usize].0);
                         inflight_cmd_cnt[c_id as usize].1 = false;
                     }
@@ -827,6 +853,7 @@ use crate::memory::DmaSlice;
                     #[cfg(enable_trace)]
                     let _s = s.enter();
                     empty_result_cnt = 0; // if find any, reset the counter
+                    #[cfg(any(debug_mode, debug_mode_verbose))]
                     debug_println!("[NVMe Device Thread] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
                     let wr_id = completion.c_id & 0x7FF;
                     let status = (completion.status >> 1) as i16;
@@ -838,6 +865,7 @@ use crate::memory::DmaSlice;
                         continue;
                     }
 
+                    #[cfg(any(debug_mode, debug_mode_verbose))]
                     debug_println!("[NVMe Device Thread] All blocks are completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
 
                     let (opcode, virtual_addr, r_key, data_len, resp_sge) = {
@@ -854,6 +882,7 @@ use crate::memory::DmaSlice;
                             let s = span!(Level::INFO, "On NVMe WRITE Completion found");
                             #[cfg(enable_trace)]
                             let _s = s.enter();
+                            #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("[NVMe Device Thread] processing write I/O completion ....");
                             {
                                 let mut capsule = capsule_context.get_resp_capsule(wr_id as usize).unwrap();
@@ -887,6 +916,7 @@ use crate::memory::DmaSlice;
                                     let s = span!(Level::INFO, "On NVMe WRITE Completion found");
                                     #[cfg(enable_trace)]
                                     let _s = s.enter();
+                                    #[cfg(any(debug_mode, debug_mode_verbose))]
                                     debug_println_verbose!("[NVMe Device Thread] processing read I/O completion ....");
                                     {
                                         let mut capsule = capsule_context.get_resp_capsule(wr_id as usize).unwrap();
