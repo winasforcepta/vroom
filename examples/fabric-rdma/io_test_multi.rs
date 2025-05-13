@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::{fmt, thread};
 use std::sync::{Arc, Mutex};
+#[cfg(any(debug_mode, debug_mode_verbose))]
 use vroom::debug_println_verbose;
 use vroom::rdma::rdma_common::rdma_binding;
 use vroom::rdma::rdma_initiator::rdma_initiator::RdmaInitiator;
@@ -221,6 +222,7 @@ fn main() {
                     let is_write_mode = io_write_mode[step];
                     match is_write_mode {
                         true => {
+                            #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("post_remote_io_write");
                             per_io_time_tracker.push_back(Instant::now());
                             transport
@@ -228,6 +230,7 @@ fn main() {
                                 .expect("failed to post remote_io_write");
                         }
                         false => {
+                            #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("post_remote_io_read");
                             per_io_time_tracker.push_back(Instant::now());
                             transport
@@ -240,6 +243,7 @@ fn main() {
                 }
 
                 let (ns, nf) = transport.poll_completions_reset().unwrap();
+                #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
                 total_io += (ns + nf) as usize;
 

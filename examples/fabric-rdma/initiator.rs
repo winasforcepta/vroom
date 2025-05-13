@@ -5,6 +5,7 @@ use std::{ptr, thread};
 use std::os::raw::{c_int, c_void};
 use std::time::Duration;
 use libc::size_t;
+#[cfg(any(debug_mode, debug_mode_verbose))]
 use vroom::{debug_println, HUGE_PAGE_SIZE};
 use vroom::rdma::buffer_manager::BufferManager;
 use vroom::rdma::rdma_common::rdma_binding;
@@ -89,6 +90,7 @@ fn main() {
         n_successes += ns as usize;
         n_errors += nf as usize;
         outstanding_requests -= (ns + nf) as usize;
+        #[cfg(any(debug_mode, debug_mode_verbose))]
         debug_println!(
             "received {} finished I/O operations. {} remaining.",
             ns + nf,
