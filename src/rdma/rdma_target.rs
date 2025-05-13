@@ -4,7 +4,7 @@ use crate::memory::DmaSlice;
     use crate::rdma::buffer_manager::{BufferManager, ThreadSafeDmaHandle};
     use crate::rdma::capsule::capsule::CapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
-    use crate::rdma::rdma_common::rdma_common::{get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, Sendable, MAX_WR};
+    use crate::rdma::rdma_common::rdma_common::{get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, Sendable, MAX_CLIENT, MAX_WR};
     use crate::rdma::rdma_common::*;
     use crate::rdma::rdma_work_manager::RdmaWorkManager;
     use crate::{NvmeDevice, NvmeQueuePair, QUEUE_LENGTH};
@@ -14,7 +14,7 @@ use crate::memory::DmaSlice;
     use std::net::Ipv4Addr;
     use std::ops::Add;
     use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
@@ -642,7 +642,7 @@ use crate::memory::DmaSlice;
                         let s = span!(Level::INFO, "On not IBV_WC_SUCCESS");
                         #[cfg(enable_trace)]
                         let _s = s.enter();
-                        debug_println!("[RDMA COMPLETION THREAD] Releasing wr_id after failed RDMA WC....");
+                        // debug_println!("[RDMA COMPLETION THREAD] Releasing wr_id after failed RDMA WC....");
                         rdma_work_manager.release_wr(completed_wr_id as u16).map_err(|_| {
                             RdmaTransportError::OpFailed("failed to release WR".into())
                         })?;
@@ -859,6 +859,7 @@ use crate::memory::DmaSlice;
             let _s = s.enter();
             let mut c_id_to_offset_map: Vec<Option<usize>> = vec![None; QUEUE_LENGTH];
             let mut empty_result_cnt = 0usize;
+            let mut inflight_cmd_cnt: [(usize, bool); QUEUE_LENGTH] = std::array::from_fn(|_| (0, false)); // .1 = is_fail
             is_nvme_thread_ready.store(true, Ordering::SeqCst);
 
             while running_signal.load(Ordering::SeqCst) {
@@ -877,12 +878,14 @@ use crate::memory::DmaSlice;
 
                     unsafe {
                         debug_println_verbose!("[NVMe Device Thread] Submit I/O {} command: bytes_offset: {}, lba: {}, size: {}", if write { "WRITE" } else { "READ" }, start_offset, lba, size);
-                        nvme_queue_pair.submit_io_with_cid(
+                        inflight_cmd_cnt[c_id as usize].0 = nvme_queue_pair.submit_io_with_cid(
                             &base_dma.to_dma().slice(start_offset..start_offset + size),
                             lba,
                             write,
                             c_id
                         );
+                        debug_println_verbose!("[NVMe Device Thread] submitted {} commands", inflight_cmd_cnt[c_id as usize].0);
+                        inflight_cmd_cnt[c_id as usize].1 = false;
                     }
                 }
                 #[cfg(enable_trace)]
@@ -898,6 +901,16 @@ use crate::memory::DmaSlice;
                     empty_result_cnt = 0; // if find any, reset the counter
                     debug_println!("[NVMe Device Thread] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
                     let wr_id = completion.c_id & 0x7FF;
+                    let status = (completion.status >> 1) as i16;
+
+                    inflight_cmd_cnt[wr_id as usize].0 -= 1;
+                    inflight_cmd_cnt[wr_id as usize].1 |= status != 0;
+
+                    if inflight_cmd_cnt[wr_id as usize].0 > 0 {
+                        continue;
+                    }
+
+                    debug_println!("[NVMe Device Thread] All blocks are completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
 
                     let (opcode, virtual_addr, r_key, data_len, resp_sge) = {
                         let (cmd, lba, virtual_addr, data_len, r_key) = capsule_context
@@ -913,10 +926,16 @@ use crate::memory::DmaSlice;
                             let s = span!(Level::INFO, "On NVMe WRITE Completion found");
                             #[cfg(enable_trace)]
                             let _s = s.enter();
-                            debug_println_verbose!("[NVMe Device Thread] Found NVMe device write I/O completion ....");
+                            debug_println_verbose!("[NVMe Device Thread] processing write I/O completion ....");
                             {
                                 let mut capsule = capsule_context.get_resp_capsule(wr_id as usize).unwrap();
-                                capsule.status = (completion.status >> 1) as i16;
+                                let status_code = {
+                                    match inflight_cmd_cnt[wr_id as usize].1 {
+                                        true => 1,
+                                        false => 0,
+                                    }
+                                };
+                                capsule.status = status_code;
                                 capsule.cmd_id = wr_id;
                             }
 
@@ -932,22 +951,53 @@ use crate::memory::DmaSlice;
                             let s = span!(Level::INFO, "On NVMe READ Completion found");
                             #[cfg(enable_trace)]
                             let _s = s.enter();
-                            let offset = c_id_to_offset_map[wr_id as usize].unwrap();
-                            let mut local_sge = unsafe {
-                                rdma_binding::ibv_sge {
-                                    addr: base_dma.virt.add(offset) as u64,
-                                    length: data_len,
-                                    lkey: buffer_l_key,
-                                }
-                            };
 
-                            rdma_spsc_producer.push(RDMAWorkRequest {
-                                wr_id,
-                                sge: local_sge,
-                                mode: Some(rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_WRITE),
-                                remote_info: Some((virtual_addr, r_key)),
-                            });
-                            c_id_to_offset_map[wr_id as usize] = None;
+                            match inflight_cmd_cnt[wr_id as usize].1 {
+                                true => {
+                                    // do RDMA send
+                                    #[cfg(enable_trace)]
+                                    let s = span!(Level::INFO, "On NVMe WRITE Completion found");
+                                    #[cfg(enable_trace)]
+                                    let _s = s.enter();
+                                    debug_println_verbose!("[NVMe Device Thread] processing read I/O completion ....");
+                                    {
+                                        let mut capsule = capsule_context.get_resp_capsule(wr_id as usize).unwrap();
+                                        let status_code = {
+                                            match inflight_cmd_cnt[wr_id as usize].1 {
+                                                true => 1,
+                                                false => 0,
+                                            }
+                                        };
+                                        capsule.status = status_code;
+                                        capsule.cmd_id = wr_id;
+                                    }
+
+                                    rdma_spsc_producer.push(RDMAWorkRequest {
+                                        wr_id,
+                                        sge: resp_sge,
+                                        mode: Some(rdma_binding::ibv_wr_opcode_IBV_WR_SEND),
+                                        remote_info: None,
+                                    });
+                                },
+                                false => {
+                                    let offset = c_id_to_offset_map[wr_id as usize].unwrap();
+                                    let mut local_sge = unsafe {
+                                        rdma_binding::ibv_sge {
+                                            addr: base_dma.virt.add(offset) as u64,
+                                            length: data_len,
+                                            lkey: buffer_l_key,
+                                        }
+                                    };
+
+                                    rdma_spsc_producer.push(RDMAWorkRequest {
+                                        wr_id,
+                                        sge: local_sge,
+                                        mode: Some(rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_WRITE),
+                                        remote_info: Some((virtual_addr, r_key)),
+                                    });
+                                    c_id_to_offset_map[wr_id as usize] = None;
+                                },
+                            }
                         },
                         _ => {}
                     }

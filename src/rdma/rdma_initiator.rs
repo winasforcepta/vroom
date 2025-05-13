@@ -9,6 +9,7 @@ pub mod rdma_initiator {
     use crate::debug_println_verbose;
     use std::net::Ipv4Addr;
     use std::{mem, ptr};
+    const RDMA_CM_TIMEOUT: i32 = 200000;
 
     pub struct RdmaInitiator {
         server_sockaddr: rdma_binding::sockaddr_in,
@@ -108,7 +109,7 @@ pub mod rdma_initiator {
             let s_ptr: *mut rdma_binding::sockaddr = s_addr_ptr as *mut rdma_binding::sockaddr;
             unsafe {
                 debug_println!("resolving address");
-                let rc = rdma_binding::rdma_resolve_addr(cm_id_ptr, ptr::null_mut(), s_ptr, 2000);
+                let rc = rdma_binding::rdma_resolve_addr(cm_id_ptr, ptr::null_mut(), s_ptr, RDMA_CM_TIMEOUT);
 
                 if rc != 0 {
                     return Err(RdmaTransportError::OpFailed(
@@ -146,7 +147,7 @@ pub mod rdma_initiator {
             let mut cm_event: *mut rdma_binding::rdma_cm_event = ptr::null_mut();
             debug_println!("Initiator setup: rdma_resolve_route.");
             unsafe {
-                let rc = rdma_binding::rdma_resolve_route(cm_id_ptr, 2000);
+                let rc = rdma_binding::rdma_resolve_route(cm_id_ptr, RDMA_CM_TIMEOUT);
                 if rc != 0 {
                     return Err(RdmaTransportError::OpFailed(
                         "Failed to resolve route".parse().unwrap(),

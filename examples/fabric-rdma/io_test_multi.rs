@@ -165,9 +165,11 @@ fn main() {
             let mut hist: Histogram<u64> = Histogram::new_with_bounds(1u64, 300_000_000_000u64, 3).unwrap();
             let mut transport = {
                 let _guard = connection_mtx.lock().unwrap();
+                println!("Client {} is connecting.", i);
                 RdmaInitiator::connect(ipv4, 4421)
                     .expect("failed to connect to server and create transport.")
             };
+            println!("Client {} is connected.", i);
             let pd = transport.get_pd().expect("failed to get pd");
             thread::sleep(Duration::from_secs(2));
             let lbas = generate_lba_offsets(ns_size_bytes, block_size as u64, workload == Workload::Random);

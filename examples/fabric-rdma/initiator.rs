@@ -20,6 +20,8 @@ struct Args {
     read: usize,
     #[arg(long, default_value_t = 1)]
     write: usize,
+    #[arg(long, default_value_t = 4096)]
+    block_size: u32,
 }
 
 pub static DEBUG_MODE: bool = true;
@@ -49,8 +51,8 @@ fn main() {
     let mut cid = 0u16;
     let nvme_addr = 0u64;
     let mut outstanding_requests = 0usize;
-    let block_size = 4096usize;
-    let layout = Layout::from_size_align(block_size, 1).unwrap();
+    let block_size = args.block_size.clone();
+    let layout = Layout::from_size_align(block_size as usize, 1).unwrap();
     let buffer_ptr = unsafe { alloc(layout) };
     let mr = unsafe {
         rdma_binding::ibv_reg_mr(
