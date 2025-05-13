@@ -95,10 +95,10 @@ fn generate_mode_is_write(ns_size_bytes: u64, block_size: u64, io_mode: IOMode) 
 
     let ret = match io_mode {
         IOMode::Read => {
-            (0..num_blocks).map(|_i| true).collect()
+            (0..num_blocks).map(|_i| false).collect()
         }
         IOMode::Write => {
-            (0..num_blocks).map(|_i| false).collect()
+            (0..num_blocks).map(|_i| true).collect()
         }
         IOMode::Mixed => {
             let mut generated: Vec<bool> = (0..num_blocks).map(|i| if i % 2 == 0 { false } else { true }).collect();
@@ -110,11 +110,22 @@ fn generate_mode_is_write(ns_size_bytes: u64, block_size: u64, io_mode: IOMode) 
     ret
 }
 
-fn print_result(bandwidth: f64, io_per_sec: f64, latency_min: u64, latency_percentile_25: u64,
+fn print_result(mode: IOMode, workload: Workload, block_size: u32, queue_depth: u32,
+                bandwidth: f64, io_per_sec: f64, latency_min: u64, latency_percentile_25: u64,
                 latency_percentile_50: u64, latency_percentile_75: u64, latency_percentile_90: u64,
                 latency_percentile_99: u64, latency_max: u64) -> () {
-    println!("\"bandwidth\", \"io_per_sec\", \"latency_min\", \"latency_percentile_25\", \"latency_percentile_50\", \"latency_percentile_75\", \"latency_percentile_90\", \"latency_percentile_99\", \"latency_max\"");
-    println!("\"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\"",
+    let mode_str: String = match mode {
+        IOMode::Read => { "Read".to_string() },
+        IOMode::Write => { "Write".to_string() }
+        IOMode::Mixed => { "Mixed".to_string() }
+    };
+    let workload_str = match workload {
+        Workload::Sequential => { "Sequential".to_string() }
+        Workload::Random => { "Random".to_string() }
+    };
+    println!("\"mode\", \"workload\", \"block_size\", \"queue_depth\", \"bandwidth\", \"io_per_sec\", \"latency_min\", \"latency_percentile_25\", \"latency_percentile_50\", \"latency_percentile_75\", \"latency_percentile_90\", \"latency_percentile_99\", \"latency_max\"");
+    println!("\"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\"",
+             mode_str, workload_str, block_size, queue_depth,
              bandwidth, io_per_sec, latency_min, latency_percentile_25, latency_percentile_50,
              latency_percentile_75, latency_percentile_90, latency_percentile_99, latency_max);
 }
@@ -137,8 +148,8 @@ fn main() {
         .expect("failed to connect to server and create transport.");
     let pd = transport.get_pd().expect("failed to get pd");
     thread::sleep(Duration::from_secs(1));
-    let lbas = generate_lba_offsets(args.ns_size_bytes, args.block_size as u64, args.workload == Workload::Random);
-    let io_write_mode = generate_mode_is_write(args.ns_size_bytes, args.block_size as u64, args.mode);
+    let lbas = generate_lba_offsets(args.ns_size_bytes.clone(), args.block_size.clone() as u64, args.workload == Workload::Random);
+    let io_write_mode = generate_mode_is_write(args.ns_size_bytes.clone(), args.block_size.clone() as u64, args.mode.clone());
 
     let write_io_buffer_layout = Layout::from_size_align(args.block_size as usize, 1).unwrap();
     let write_io_buffer = unsafe { alloc(write_io_buffer_layout) };
@@ -239,7 +250,8 @@ fn main() {
     let latency_percentile_90 = hist.value_at_quantile(0.9); // nanoseconds
     let latency_percentile_99 = hist.value_at_quantile(0.99); // nanoseconds
     let latency_max = hist.max(); // nanoseconds
-    print_result(bandwidth, io_per_sec, latency_min, latency_percentile_25,
+    print_result(args.mode.clone(), args.workload.clone(), args.block_size.clone(), args.queue_depth.clone(),
+                 bandwidth, io_per_sec, latency_min, latency_percentile_25,
                  latency_percentile_50, latency_percentile_75, latency_percentile_90,
                  latency_percentile_99, latency_max);
     println!("total I/O: {}", total_io);

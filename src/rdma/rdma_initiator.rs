@@ -248,6 +248,7 @@ pub mod rdma_initiator {
             })
         }
 
+        #[inline(always)]
         pub fn post_remote_io_write(
             &mut self,
             nvme_cid: u16,
@@ -285,14 +286,12 @@ pub mod rdma_initiator {
 
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
-            println!("post_rcv_resp_work wr_id={}", wr_id);
             self.rwm
                 .post_rcv_resp_work(wr_id, self.ctx.get_sendable_qp(), resp_sge)
                 .unwrap();
 
             // Then send the request
             let req_sge = self.capsule_context.get_req_sge(wr_id as usize).unwrap();
-            println!("post_send_request_work wr_id={}", wr_id);
             self.rwm
                 .post_send_request_work(wr_id, self.ctx.get_sendable_qp(), req_sge)
                 .map_err(|_| {
@@ -304,6 +303,7 @@ pub mod rdma_initiator {
             Ok(0)
         }
 
+        #[inline(always)]
         pub fn post_remote_io_read(
             &mut self,
             nvme_cid: u16,
