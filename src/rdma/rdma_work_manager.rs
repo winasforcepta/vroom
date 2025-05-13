@@ -1,3 +1,4 @@
+use tracing::Level;
 use crate::rdma::rdma_common::rdma_binding;
 use crate::debug_println_verbose;
 use libc::{c_int, c_uint};
@@ -8,6 +9,7 @@ use std::mem;
 use std::ptr;
 use std::sync::Arc;
 use crossbeam::queue::ArrayQueue;
+use tracing::span;
 use crate::rdma::rdma_common::rdma_common::Sendable;
 
 #[derive(Debug)]
@@ -108,24 +110,45 @@ impl RdmaWorkManager {
 
     #[inline(always)]
     pub fn allocate_wr_id(&self) -> Option<u16> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.allocate_wr_id");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
+
         self.wr_id_allocator.allocate_wr_id()
     }
 
     #[inline(always)]
     pub fn release_wr(&self, wr_id: u16) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.release_wr");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         self.wr_id_allocator.release_wr_id(wr_id)
     }
 
     #[inline(always)]
     pub fn any_inflight_wr(&self) -> bool {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.any_inflight_wr");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         self.wr_id_allocator.any_inflight_wr()
     }
 
     pub fn is_not_empty(&self) -> bool {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.is_not_empty");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         unsafe { *self.n_completed_work.get() > 0 }
     }
 
     pub fn reset_wc(&self) -> (u16, u16) {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.reset_wc");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mut n_suc = 0u16;
         let mut n_fail = 0u16;
 
@@ -155,6 +178,10 @@ impl RdmaWorkManager {
 
     #[inline(always)]
     pub fn next_wc(&self) -> Option<&rdma_binding::ibv_wc> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.next_wc");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         unsafe {
             let idx = *self.first_unprocessed_wc_index.get();
             let count = *self.n_completed_work.get();
@@ -172,6 +199,10 @@ impl RdmaWorkManager {
                          qp: Sendable<rdma_binding::ibv_qp>,
                          mut sge: rdma_binding::ibv_sge,
     ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_rcv_work");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
             wr_id: wr_id as u64,
             next: ptr::null_mut(),
@@ -195,6 +226,10 @@ impl RdmaWorkManager {
                           remote_addr: u64,
                           remote_rkey: u32,
     ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_send_work");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mut wr = rdma_binding::ibv_send_wr {
             wr_id: wr_id as u64,
             next: ptr::null_mut(),
@@ -226,6 +261,10 @@ impl RdmaWorkManager {
         comp_channel: Sendable<rdma_binding::ibv_comp_channel>,
         cq: Sendable<rdma_binding::ibv_cq>,
     ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.poll_completed_works");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let poll = |label: &str| -> Result<u16, WorkManagerError> {
             unsafe {
                 debug_println_verbose!("poll_completed_works: {}", label);
@@ -284,6 +323,10 @@ impl RdmaWorkManager {
         &self,
         cq: Sendable<rdma_binding::ibv_cq>,
     ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.poll_completed_works_busy_looping");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let poll = |label: &str| -> Result<u16, WorkManagerError> {
             unsafe {
                 // debug_println_verbose!("poll_completed_works: {}", label);
@@ -322,6 +365,10 @@ impl RdmaWorkManager {
         &self,
         cq: &Sendable<rdma_binding::ibv_cq>,
     ) -> Result<bool, WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.try_poll_completed_works");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let poll = |label: &str| -> Result<u16, WorkManagerError> {
             unsafe {
                 // debug_println_verbose!("poll_completed_works: {}", label);
@@ -360,6 +407,10 @@ impl RdmaWorkManager {
         &self,
         cq: *mut rdma_binding::ibv_cq,
     ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.request_for_notification");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         unsafe {
             debug_println_verbose!("poll_completed_works: calling ibv_req_notify_cq");
             rdma_binding::ibv_req_notify_cq_ex(cq, 0);
@@ -375,6 +426,10 @@ impl RdmaWorkManager {
         qp: &Sendable<rdma_binding::ibv_qp>,
         mut sge: rdma_binding::ibv_sge,
     ) -> Result<u16, WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_rcv_req_work");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
 
         let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
@@ -405,6 +460,10 @@ impl RdmaWorkManager {
         qp: &Sendable<rdma_binding::ibv_qp>,
         mut sge: rdma_binding::ibv_sge,
     ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_send_response_work");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
 
         let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
@@ -452,6 +511,10 @@ impl RdmaWorkManager {
         remote_rkey: u32,
         mode: rdma_binding::ibv_wr_opcode,
     ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_rmt_work");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mut remote_wr = rdma_binding::ibv_send_wr {
             wr_id: wr_id as u64,
             next: ptr::null_mut(),
@@ -494,6 +557,10 @@ impl RdmaWorkManager {
         qp: Sendable<rdma_binding::ibv_qp>,
         mut sge: rdma_binding::ibv_sge,
     ) -> Result<u16, WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_rcv_resp_work");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
 
         let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
@@ -525,6 +592,10 @@ impl RdmaWorkManager {
         qp: Sendable<rdma_binding::ibv_qp>,
         mut sge: rdma_binding::ibv_sge,
     ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_send_request_work");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
         let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
             wr_id: wr_id as u64,

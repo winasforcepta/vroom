@@ -390,7 +390,8 @@ use crate::memory::DmaSlice;
                             }
                         }
                         debug_println!("Stop signal has been sent into the thread {}", address_id);
-                        // return Ok((0)); // TODO: Just for benchmark. Need to delete this
+                        #[cfg(enable_trace)]
+                        return Ok((0)); // TODO: Just for benchmark. Need to delete this
                     }
                     _ => continue
                 }
@@ -584,13 +585,7 @@ use crate::memory::DmaSlice;
                 }
 
                 // debug_println!("[RDMA COMPLETION THREAD] Polling RDMA completion....");
-                #[cfg(enable_trace)]
-                let poll_span = span!(Level::INFO, "Poll RDMA WC");
-                #[cfg(enable_trace)]
-                let poll_guard = poll_span.entered();
                 let any_completion = rdma_work_manager.try_poll_completed_works(&cq).unwrap();
-                #[cfg(enable_trace)]
-                drop(poll_guard);
 
                 if !any_completion {
                     spin_loop();
@@ -688,10 +683,6 @@ use crate::memory::DmaSlice;
 
 
                             let ((buffer_virtual_add, _, _, _), buffer_idx, lkey) = {
-                                #[cfg(enable_trace)]
-                                let s = span!(Level::INFO, "buffer_manager.allocate()");
-                                #[cfg(enable_trace)]
-                                let _s = s.enter();
                                 let (buffer_idx, mr) = buffer_manager.allocate(client_id).expect("Failed to allocate buffer from buffer manager"); // TODO(what should we do when there is no available buffer?)
                                 let lkey = unsafe {
                                     #[cfg(not(disable_assert))]
@@ -739,50 +730,14 @@ use crate::memory::DmaSlice;
                                 #[cfg(enable_trace)]
                                 let _s = s.enter();
                                 debug_println!("[RDMA COMPLETION THREAD] Response is sent for wr_id: {}", completed_wr_id);
-                                #[cfg(enable_trace)]
-                                let s = span!(Level::INFO, "get_remote_op_buffer(completed_wr_id)");
-                                #[cfg(enable_trace)]
-                                let guard = s.entered();
                                 let buffer_idx = client_context.get_remote_op_buffer(completed_wr_id as usize)?;
-                                #[cfg(enable_trace)]
-                                drop(guard);
-                                #[cfg(enable_trace)]
-                                let s = span!(Level::INFO, " bm.free(buffer_idx)");
-                                #[cfg(enable_trace)]
-                                let guard = s.entered();
                                 buffer_manager.free(buffer_idx);
-                                #[cfg(enable_trace)]
-                                drop(guard);
-                                #[cfg(enable_trace)]
-                                let s = span!(Level::INFO, "ctx.free_remote_op_buffer(wr_id)");
-                                #[cfg(enable_trace)]
-                                let guard = s.entered();
                                 client_context.free_remote_op_buffer(completed_wr_id as usize)?;
-                                #[cfg(enable_trace)]
-                                drop(guard);
-                                #[cfg(enable_trace)]
-                                let s = span!(Level::INFO, "rdma_work_manager.release_wr(wr_id)");
-                                #[cfg(enable_trace)]
-                                let guard = s.entered();
                                 rdma_work_manager.release_wr(completed_wr_id as u16).unwrap();
-                                #[cfg(enable_trace)]
-                                drop(guard);
-                                #[cfg(enable_trace)]
-                                let s = span!(Level::INFO, "rwm.allocate_wr_id()");
-                                #[cfg(enable_trace)]
-                                let guard = s.entered();
                                 let new_wr_id = rdma_work_manager.allocate_wr_id().unwrap();
                                 let sge = capsule_context.get_req_sge(new_wr_id as usize).unwrap();
-                                #[cfg(enable_trace)]
-                                drop(guard);
                                 debug_println_verbose!("[RDMA COMPLETION THREAD] Posting another receive request with wr_id={}", completed_wr_id);
-                                #[cfg(enable_trace)]
-                                let s = span!(Level::INFO, "rwm.post_rcv_req_work(new_wr_id, qp, sge)");
-                                #[cfg(enable_trace)]
-                                let guard = s.entered();
                                 rdma_work_manager.post_rcv_req_work(new_wr_id, &qp, sge).unwrap();
-                                #[cfg(enable_trace)]
-                                drop(guard);
                             }
                         }
                         rdma_binding::ibv_wc_opcode_IBV_WC_RDMA_READ => {
@@ -791,29 +746,11 @@ use crate::memory::DmaSlice;
                             #[cfg(enable_trace)]
                             let _s = s.enter();
                             // This is a write I/O. Hence, call the send_nvme_io_write()
-                            #[cfg(enable_trace)]
-                            let s = span!(Level::INFO, " client_context.get_remote_op_buffer(wr_id)");
-                            #[cfg(enable_trace)]
-                            let guard = s.entered();
                             let buffer_idx = client_context.get_remote_op_buffer(completed_wr_id as usize)?;
-                            #[cfg(enable_trace)]
-                            drop(guard);
-                            #[cfg(enable_trace)]
-                            let s = span!(Level::INFO, " capsule_context.get_request_capsule_content(wr_id)");
-                            #[cfg(enable_trace)]
-                            let guard = s.entered();
                             let (_cmd, lba, _virtual_addr, data_len, _r_key) = capsule_context
                                 .get_request_capsule_content(completed_wr_id as usize)
                                 .unwrap();
-                            #[cfg(enable_trace)]
-                            drop(guard);
-                            #[cfg(enable_trace)]
-                            let s = span!(Level::INFO, "nvme_spsc_producer.push()");
-                            #[cfg(enable_trace)]
-                            let guard = s.entered();
                             nvme_spsc_producer.push((completed_wr_id as u16, buffer_idx as usize * block_size, lba, true, data_len as usize));
-                            #[cfg(enable_trace)]
-                            drop(guard);
                         }
                         rdma_binding::ibv_wc_opcode_IBV_WC_RDMA_WRITE => {
                             #[cfg(enable_trace)]
@@ -822,22 +759,10 @@ use crate::memory::DmaSlice;
                             let _s = s.enter();
 
                             // This is a read I/O. This means the final remote write has been completed. Then, send response
-                            #[cfg(enable_trace)]
-                            let s = span!(Level::INFO, "write response + ccapsule_context.get_resp_sge(wr_id)");
-                            #[cfg(enable_trace)]
-                            let guard = s.entered();
                             capsule_context.set_response_status(completed_wr_id as usize, 0).unwrap();
                             let resp_sge = capsule_context.get_resp_sge(completed_wr_id as usize)
                                 .unwrap();
-                            #[cfg(enable_trace)]
-                            drop(guard);
-                            #[cfg(enable_trace)]
-                            let s = span!(Level::INFO, "rwm.post_send_response_work()");
-                            #[cfg(enable_trace)]
-                            let guard = s.entered();
                             rdma_work_manager.post_send_response_work(completed_wr_id as u16, &qp, resp_sge).unwrap();
-                            #[cfg(enable_trace)]
-                            drop(guard);
                         }
                         _ => {}
                     }
@@ -895,10 +820,6 @@ use crate::memory::DmaSlice;
                         inflight_cmd_cnt[c_id as usize].1 = false;
                     }
                 }
-                #[cfg(enable_trace)]
-                drop(guard);
-                #[cfg(enable_trace)]
-                let guard = span!(Level::INFO, "nvme_qp.poll_completion()").entered();
 
                 while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
                     #[cfg(enable_trace)]
@@ -1009,37 +930,6 @@ use crate::memory::DmaSlice;
                         _ => {}
                     }
                 }
-                #[cfg(enable_trace)]
-                drop(guard);
-
-                // empty_result_cnt = empty_result_cnt + 1;
-                //
-                // match empty_result_cnt {
-                //     0..=1000 => {
-                //         // do nothing == spin loop
-                //         spin_loop(); // hint CPU
-                //     },
-                //     1001..=2500 => {
-                //         // yield
-                //         thread::yield_now();
-                //     },
-                //     2501..=2510 => {
-                //         // micro-seconds sleep (make sure 1/4 of expected NVMe I/O latency
-                //         thread::sleep(Duration::from_micros(5))
-                //     },
-                //     2511..=3000 => {
-                //         // Accommodate big block I/O
-                //         thread::sleep(Duration::from_micros(100))
-                //     },
-                //     3001..=3060 => {
-                //         // Accommodate big block I/O
-                //         debug_println_verbose!("[NVMe Device Thread] arrived {} steps without new submission. Sleeping for 1 seconds", empty_result_cnt);
-                //         thread::sleep(Duration::from_secs(1))
-                //     },
-                //     _ => {
-                //         // do nothing, we will block in the next step
-                //     }
-                // }
             }
 
             Ok(0)

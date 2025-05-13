@@ -1,3 +1,4 @@
+use tracing::Level;
 use crate::rdma::rdma_common::rdma_binding;
 use crate::rdma::rdma_common::rdma_common::{RdmaTransportError, MAX_CLIENT};
 use crate::memory::{Dma};
@@ -8,6 +9,7 @@ use std::ptr::null_mut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use crossbeam::queue::{ArrayQueue};
+use tracing::span;
 use crate::rdma::rdma_common::rdma_binding::ibv_mr;
 
 pub type BufferManagerIdx = u32;
@@ -86,6 +88,11 @@ impl BufferManager {
 
     #[inline(always)]
     pub fn get_memory_info(&self, client_idx: usize, idx: BufferManagerIdx) -> (*mut u8, PhysicalAddrType, usize, u32) {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "buffer_manager.get_memory_info");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
+
         #[cfg(not(disable_assert))]
         assert!(idx < self.n_blocks, "get_dma_slice out of index");
         let dma = unsafe { self.buffer.to_dma() };
@@ -97,6 +104,11 @@ impl BufferManager {
 
     #[inline(always)]
     pub fn allocate(&self, client_idx: usize) -> Option<(BufferManagerIdx, *mut rdma_binding::ibv_mr)> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "buffer_manager.allocate");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
+
         #[cfg(not(disable_assert))]
         assert!(!self.mr[client_idx].load(Ordering::SeqCst).is_null(), "RDMA MR is not registered yet");
 
@@ -112,6 +124,10 @@ impl BufferManager {
 
     #[inline(always)]
     pub fn free(&self, idx: BufferManagerIdx) {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "buffer_manager.free");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         self.free_idx_list.push(idx).unwrap();
     }
 
@@ -122,6 +138,10 @@ impl BufferManager {
 
     #[inline(always)]
     pub fn get_lkey(&self, client_idx: usize) -> Option<u32> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "buffer_manager.get_lkey");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
         let mr = self.mr[client_idx].load(Ordering::SeqCst);
         if mr == ptr::null_mut() {
             None

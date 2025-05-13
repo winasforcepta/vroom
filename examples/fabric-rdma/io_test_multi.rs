@@ -171,7 +171,7 @@ fn main() {
             };
             println!("Client {} is connected.", i);
             let pd = transport.get_pd().expect("failed to get pd");
-            thread::sleep(Duration::from_secs(2));
+            thread::sleep(Duration::from_millis(500));
             let lbas = generate_lba_offsets(ns_size_bytes, block_size as u64, workload == Workload::Random);
             let io_write_mode = generate_mode_is_write(ns_size_bytes, block_size as u64, mode);
 
@@ -221,12 +221,14 @@ fn main() {
                     let is_write_mode = io_write_mode[step];
                     match is_write_mode {
                         true => {
+                            debug_println_verbose!("post_remote_io_write");
                             per_io_time_tracker.push_back(Instant::now());
                             transport
                                 .post_remote_io_write(step as u16, lba, write_io_buffer, args.block_size, write_io_buffer_rkey)
                                 .expect("failed to post remote_io_write");
                         }
                         false => {
+                            debug_println_verbose!("post_remote_io_read");
                             per_io_time_tracker.push_back(Instant::now());
                             transport
                                 .post_remote_io_read(step as u16, lba, read_io_buffer, args.block_size, read_io_buffer_rkey)
@@ -248,6 +250,10 @@ fn main() {
                 quota = quota + (ns + nf) as usize;
                 let elapsed = before.elapsed();
                 total += elapsed;
+                if nf > 0 {
+                    eprintln!("Error I/O occurred!");
+                    break;
+                }
             }
 
             let bw = (total_io * block_size as usize) as f64 / total.as_secs_f64();

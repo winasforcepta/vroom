@@ -300,8 +300,6 @@ pub mod rdma_initiator {
                     RdmaTransportError::OpFailed("failed to post send request WR".into())
                 })?;
 
-
-
             Ok(0)
         }
 
@@ -380,9 +378,13 @@ pub mod rdma_initiator {
         }
 
         pub fn poll_completions_reset(&mut self) -> Result<(u16, u16), RdmaTransportError> {
+            debug_println_verbose!("Polling completion...");
             self.rwm
-                .poll_completed_works_busy_looping(self.ctx.get_sendable_cq())
+                .try_poll_completed_works(&self.ctx.get_sendable_cq())
                 .unwrap();
+            if !self.rwm.is_not_empty() {
+                return Ok((0, 0))
+            }
             Ok(self.rwm.reset_wc())
         }
 

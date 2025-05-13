@@ -1,4 +1,5 @@
 pub mod capsule {
+
     use crate::cmd::NvmeCommand;
     use crate::rdma::rdma_common::rdma_binding;
     use crate::rdma::rdma_common::rdma_binding::ibv_pd;
@@ -7,6 +8,8 @@ pub mod capsule {
     use std::{fmt, mem, ptr};
     use std::cell::UnsafeCell;
     use std::sync::{Arc, Mutex};
+    use tracing::span;
+    use tracing::Level;
 
     #[derive(Debug)]
     pub enum RDMACapsuleError {
@@ -157,6 +160,11 @@ pub mod capsule {
             &self,
             idx: usize,
         ) -> Result<rdma_binding::ibv_sge, RDMACapsuleError> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "capsule.get_req_sge");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
+
             #[cfg(not(disable_assert))]
             assert!(idx < self.cnt as usize);
             let capsule_ptr = unsafe { self.req_capsules.as_ptr().add(idx) } as u64;
@@ -177,6 +185,11 @@ pub mod capsule {
             &self,
             idx: usize,
         ) -> Result<rdma_binding::ibv_sge, RDMACapsuleError> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "capsule.get_resp_sge");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
+
             #[cfg(not(disable_assert))]
             assert!(idx < self.cnt as usize);
             let capsule_ptr = unsafe { self.resp_capsules.as_ptr().add(idx) } as u64;
@@ -197,6 +210,11 @@ pub mod capsule {
             idx: usize,
             status: i16
         ) -> Result<(), RDMACapsuleError> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "capsule.set_response_status");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
+
             let c_id = self.req_capsules.get(idx).unwrap().cmd.c_id;
             let resp_capsule = unsafe {
                 &mut *self.resp_capsules.get(idx).unwrap().get()
@@ -211,12 +229,22 @@ pub mod capsule {
             &self,
             idx: usize,
         ) -> Result<&mut NVMeResponseCapsule, RDMACapsuleError> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "capsule.get_resp_capsule");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
+
             self.resp_capsules.get(idx)
                 .map(|cell| unsafe { &mut *cell.get() })
                 .ok_or(RDMACapsuleError::InvalidIndex)
         }
 
         pub fn get_request_capsule_content(&self, idx: usize) -> Result<(NvmeCommand, u64, u64, u32, u32), RDMACapsuleError> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "capsule.get_request_capsule_content");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
+
             debug_println_verbose!("[CAPSULE] get_request_capsule_content: idx = {}", idx);
             let capsule = self.req_capsules.as_slice().get(idx).unwrap();
             Ok((

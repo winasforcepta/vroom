@@ -4,7 +4,8 @@ pub mod rdma_binding {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 pub mod rdma_common {
-    use core::slice::SlicePattern;
+    use tracing::Level;
+use core::slice::SlicePattern;
     use crate::rdma::buffer_manager::{BufferManagerIdx};
     use crate::rdma::rdma_common::rdma_binding;
     use std::any::Any;
@@ -12,6 +13,7 @@ pub mod rdma_common {
     use std::os::raw::c_int;
     use std::{fmt, io, mem, ptr};
     use std::cell::UnsafeCell;
+    use tracing::span;
     use crate::memory::Dma;
     use crate::QUEUE_LENGTH;
 
@@ -246,6 +248,11 @@ pub mod rdma_common {
         }
 
         pub fn get_sendable_qp(&self) -> Sendable<rdma_binding::ibv_qp> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "ClientRdmaContext.get_sendable_qp");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
+
             unsafe {
                 let raw_qp = (*self.cm_id).qp;
                 Sendable::new(raw_qp)
@@ -253,18 +260,30 @@ pub mod rdma_common {
         }
 
         pub fn get_sendable_cq(&self) -> Sendable<rdma_binding::ibv_cq> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "ClientRdmaContext.get_sendable_cq");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
             unsafe {
                 Sendable::new(self.cq)
             }
         }
 
         pub fn get_sendable_io_comp_channel(&self) -> Sendable<rdma_binding::ibv_comp_channel> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "ClientRdmaContext.get_sendable_io_comp_channel");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
             unsafe {
                 Sendable::new(self.io_comp_channel)
             }
         }
 
         fn _get_client_address(id: *mut rdma_binding::rdma_cm_id) -> String {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "ClientRdmaContext._get_client_address");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
             unsafe {
                 // Access the src_sin field of the union
                 let src_sin = (*id).route.addr.__bindgen_anon_1.src_sin;
@@ -278,6 +297,10 @@ pub mod rdma_common {
         }
 
         pub fn set_wr_id_buffer_idx(&self, wr_id: usize, buffer_idx: BufferManagerIdx) {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "ClientRdmaContext.set_wr_id_buffer_idx");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
             debug_println_verbose!("[DEBUG] setting wrid_to_buffer_idx[{}] = {}", wr_id, buffer_idx);
             unsafe {
                 (*self.wrid_to_buffer_idx.get())[wr_id] = Some(buffer_idx);
@@ -288,6 +311,11 @@ pub mod rdma_common {
             &self,
             idx: usize,
         ) -> Result<BufferManagerIdx, RdmaTransportError> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "ClientRdmaContext.get_remote_op_buffer");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
+
             debug_println_verbose!("[DEBUG] getting wrid_to_buffer_idx[{}]", idx);
             let wrid_ptr = self.wrid_to_buffer_idx.get();
             #[cfg(not(disable_assert))]
@@ -305,6 +333,11 @@ pub mod rdma_common {
             &self,
             idx: usize,
         ) -> Result<(), RdmaTransportError> {
+            #[cfg(enable_trace)]
+            let span = span!(Level::INFO, "ClientRdmaContext.free_remote_op_buffer");
+            #[cfg(enable_trace)]
+            let _ = span.enter();
+
             debug_println_verbose!("[DEBUG] free wrid_to_buffer_idx[{}]", idx);
             unsafe {
                 (*self.wrid_to_buffer_idx.get())[idx] = None;
