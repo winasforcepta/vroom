@@ -284,6 +284,7 @@ use crate::memory::DmaSlice;
                         let is_nvme_thread_ready = Arc::new(AtomicBool::new(false));
 
                         let rdma_thread_handle = {
+                            let client_id = self.client_handlers.len();
                             let thread_signal = client_connection_signal.clone();
                             let thread_buffer_manager = self.buffer_manager.clone();
                             let capsule_context_clone = capsule_context.clone();
@@ -296,6 +297,7 @@ use crate::memory::DmaSlice;
                                 .name("RDMA Thread".into())
                                 .spawn(move || {
                                     Self::_run_rdma_thread(
+                                        client_id,
                                         thread_signal,
                                         thread_buffer_manager,
                                         block_size,
@@ -310,6 +312,7 @@ use crate::memory::DmaSlice;
                         };
 
                         let nvme_device_thread_handle = {
+                            let client_id = self.client_handlers.len();
                             let thread_signal = client_connection_signal.clone();
                             let nvme_device_arc_clone = self.nvme_device_arc.clone();
                             let capsule_context_clone = capsule_context.clone();
@@ -317,7 +320,7 @@ use crate::memory::DmaSlice;
                             let is_nvme_thread_ready = is_nvme_thread_ready.clone();
 
                             loop {
-                                match self.buffer_manager.get_lkey() {
+                                match self.buffer_manager.get_lkey(client_id) {
                                     None => {
                                         continue;
                                     }
@@ -339,6 +342,7 @@ use crate::memory::DmaSlice;
                                     }).unwrap();
 
                                     RdmaTarget::_run_nvme_device_thread(
+                                        client_id,
                                         nvme_queue_pair,
                                         base_dma_handler,
                                         thread_signal,
@@ -380,7 +384,7 @@ use crate::memory::DmaSlice;
                             }
                         }
                         debug_println!("Stop signal has been sent into the thread {}", address_id);
-                        return Ok((0)); // TODO: Just for benchmark. Need to delete this
+                        // return Ok((0)); // TODO: Just for benchmark. Need to delete this
                     }
                     _ => continue
                 }
@@ -408,6 +412,7 @@ use crate::memory::DmaSlice;
         }
 
         fn _run_rdma_thread(
+            client_id: usize,
             running_signal: Arc<AtomicBool>,
             mut buffer_manager: Arc<BufferManager>,
             block_size: usize,
@@ -444,7 +449,7 @@ use crate::memory::DmaSlice;
                 }
             }
 
-            buffer_manager.register_mr(pd_ptr)?;
+            buffer_manager.register_mr(client_id, pd_ptr)?;
 
             // ACK the event. rdma_ack_cm_event frees the cm_event object, but not object inside of it.
             unsafe {
@@ -680,13 +685,14 @@ use crate::memory::DmaSlice;
                                 let s = span!(Level::INFO, "buffer_manager.allocate()");
                                 #[cfg(enable_trace)]
                                 let _s = s.enter();
-                                let (buffer_idx, mr) = buffer_manager.allocate().expect("Failed to allocate buffer from buffer manager"); // TODO(what should we do when there is no available buffer?)
+                                let (buffer_idx, mr) = buffer_manager.allocate(client_id).expect("Failed to allocate buffer from buffer manager"); // TODO(what should we do when there is no available buffer?)
                                 let lkey = unsafe {
+                                    #[cfg(not(disable_assert))]
                                     assert!(!mr.is_null(), "Buffer manager MR is null");
                                     (*mr).lkey.clone()
                                 };
                                 client_context.set_wr_id_buffer_idx(completed_wr_id as usize, buffer_idx);
-                                (buffer_manager.get_memory_info(buffer_idx), buffer_idx, lkey)
+                                (buffer_manager.get_memory_info(client_id, buffer_idx), buffer_idx, lkey)
                             };
 
                             match cmd.opcode {
@@ -837,6 +843,7 @@ use crate::memory::DmaSlice;
         }
 
         fn _run_nvme_device_thread(
+            client_id: usize,
             mut nvme_queue_pair: NvmeQueuePair,
             base_dma: ThreadSafeDmaHandle,
             running_signal: Arc<AtomicBool>,

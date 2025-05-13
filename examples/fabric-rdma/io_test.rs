@@ -147,7 +147,7 @@ fn main() {
     let mut transport = RdmaInitiator::connect(ipv4, 4421)
         .expect("failed to connect to server and create transport.");
     let pd = transport.get_pd().expect("failed to get pd");
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(3));
     let lbas = generate_lba_offsets(args.ns_size_bytes.clone(), args.block_size.clone() as u64, args.workload == Workload::Random);
     let io_write_mode = generate_mode_is_write(args.ns_size_bytes.clone(), args.block_size.clone() as u64, args.mode.clone());
 

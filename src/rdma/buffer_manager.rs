@@ -1,13 +1,14 @@
 use crate::rdma::rdma_common::rdma_binding;
-use crate::rdma::rdma_common::rdma_common::RdmaTransportError;
-use crate::memory::{Dma, DmaSlice};
+use crate::rdma::rdma_common::rdma_common::{RdmaTransportError, MAX_CLIENT};
+use crate::memory::{Dma};
 use libc::{munmap, size_t, };
 use std::os::raw::{c_int, c_void};
-use std::{io};
+use std::{io, ptr};
 use std::ptr::null_mut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use crossbeam::queue::{ArrayQueue};
+use crate::rdma::rdma_common::rdma_binding::ibv_mr;
 
 pub type BufferManagerIdx = u32;
 pub type PhysicalAddrType = usize;
@@ -19,7 +20,7 @@ pub struct BufferManager {
     block_size: usize,
     buffer: ThreadSafeDmaHandle,
     free_idx_list: Arc<ArrayQueue<u32>>,
-    mr: AtomicPtr<rdma_binding::ibv_mr>,
+    mr: [AtomicPtr<rdma_binding::ibv_mr>; MAX_CLIENT as usize],
 }
 
 impl BufferManager {
@@ -49,14 +50,16 @@ impl BufferManager {
             block_size: block_size_bytes,
             buffer: thread_safe_dma,
             free_idx_list,
-            mr: AtomicPtr::new(null_mut())
+            mr: std::array::from_fn(|_| AtomicPtr::new(null_mut()))
         })
     }
 
     pub fn register_mr(
         &self,
+        client_idx: usize,
         pd_ptr: *mut rdma_binding::ibv_pd,
     ) -> Result<(), RdmaTransportError> {
+        assert!(client_idx < MAX_CLIENT as usize, "Protection domain should not be null");
         assert!(!pd_ptr.is_null(), "Protection domain should not be null");
 
         let mr_ptr = unsafe {
@@ -77,27 +80,29 @@ impl BufferManager {
             ));
         }
 
-        self.mr.store(mr_ptr, Ordering::SeqCst);
+        self.mr[client_idx].store(mr_ptr, Ordering::SeqCst);
         Ok(())
     }
 
     #[inline(always)]
-    pub fn get_memory_info(&self, idx: BufferManagerIdx) -> (*mut u8, PhysicalAddrType, usize, u32) {
+    pub fn get_memory_info(&self, client_idx: usize, idx: BufferManagerIdx) -> (*mut u8, PhysicalAddrType, usize, u32) {
+        #[cfg(not(disable_assert))]
         assert!(idx < self.n_blocks, "get_dma_slice out of index");
         let dma = unsafe { self.buffer.to_dma() };
         let virt = unsafe { dma.virt.add((idx as usize* self.block_size)) };
         let phys = dma.phys + (idx as usize * self.block_size);
-        let lkey = unsafe { (*self.mr.load(Ordering::SeqCst)).lkey };
+        let lkey = unsafe { (*self.mr[client_idx].load(Ordering::SeqCst)).lkey };
         (virt, phys, self.block_size, lkey)
     }
 
     #[inline(always)]
-    pub fn allocate(&self) -> Option<(BufferManagerIdx, *mut rdma_binding::ibv_mr)> {
-        assert!(!self.mr.load(Ordering::SeqCst).is_null(), "RDMA MR is not registered yet");
+    pub fn allocate(&self, client_idx: usize) -> Option<(BufferManagerIdx, *mut rdma_binding::ibv_mr)> {
+        #[cfg(not(disable_assert))]
+        assert!(!self.mr[client_idx].load(Ordering::SeqCst).is_null(), "RDMA MR is not registered yet");
 
         if let Some(idx) = self.free_idx_list.pop() {
             debug_println_verbose!("[Buffer manager] block {} is allocated", idx);
-            Some((idx, self.mr.load(Ordering::SeqCst)))
+            Some((idx, self.mr[client_idx].load(Ordering::SeqCst)))
         } else {
             debug_println_verbose!("Failed to pop free_idx_list");
             None
@@ -116,18 +121,25 @@ impl BufferManager {
     }
 
     #[inline(always)]
-    pub fn get_lkey(&self) -> Option<u32> {
-        if self.mr.load(Ordering::SeqCst).is_null() {
-            return None
+    pub fn get_lkey(&self, client_idx: usize) -> Option<u32> {
+        let mr = self.mr[client_idx].load(Ordering::SeqCst);
+        if mr == ptr::null_mut() {
+            None
+        } else {
+            unsafe { Some((*mr).lkey) }
         }
-        Some(unsafe { (*self.mr.load(Ordering::SeqCst)).lkey })
     }
 }
 
 impl Drop for BufferManager {
     fn drop(&mut self) {
         unsafe {
-            rdma_binding::ibv_dereg_mr(self.mr.load(Ordering::SeqCst));
+            for i in 0usize..MAX_CLIENT as usize {
+                if self.mr[i].load(Ordering::SeqCst) != null_mut() {
+                    rdma_binding::ibv_dereg_mr(self.mr[i].load(Ordering::SeqCst));
+                }
+            }
+
             munmap(
                 self.buffer.virt as *mut c_void,
                 self.total_size,

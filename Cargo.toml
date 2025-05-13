@@ -16,6 +16,10 @@ path = "examples/fabric-rdma/server.rs"
 name = "fabrics-io-test"
 path = "examples/fabric-rdma/io_test.rs"
 
+[[example]]
+name = "fabrics-io-test-multi"
+path = "examples/fabric-rdma/io_test_multi.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

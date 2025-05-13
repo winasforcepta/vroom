@@ -18,6 +18,7 @@ pub mod rdma_common {
     pub static MAX_SGE: u32 = 1u32;
     // 1024 to follow the VROOM constant
     pub static MAX_WR: usize = QUEUE_LENGTH;
+    pub const MAX_CLIENT: u16 = 16u16;
     pub static CQ_CAPACITY: usize = QUEUE_LENGTH;
 
     pub struct Sendable<T> {
@@ -289,9 +290,11 @@ pub mod rdma_common {
         ) -> Result<BufferManagerIdx, RdmaTransportError> {
             debug_println_verbose!("[DEBUG] getting wrid_to_buffer_idx[{}]", idx);
             let wrid_ptr = self.wrid_to_buffer_idx.get();
+            #[cfg(not(disable_assert))]
             assert!(!wrid_ptr.is_null(), "Pointer is null");
 
             unsafe {
+                #[cfg(not(disable_assert))]
                 assert!(wrid_ptr.as_ref().unwrap().as_slice()[idx].is_some(), "get_remote_op_buffer({}) is None", idx);
                 debug_println_verbose!("[DEBUG] getting wrid_to_buffer_idx[{}] = {}", idx, wrid_ptr.as_ref().unwrap().as_slice()[idx].unwrap().clone());
                 Ok(wrid_ptr.as_ref().unwrap().as_slice()[idx].unwrap().clone())

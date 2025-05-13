@@ -157,6 +157,7 @@ pub mod capsule {
             &self,
             idx: usize,
         ) -> Result<rdma_binding::ibv_sge, RDMACapsuleError> {
+            #[cfg(not(disable_assert))]
             assert!(idx < self.cnt as usize);
             let capsule_ptr = unsafe { self.req_capsules.as_ptr().add(idx) } as u64;
 
@@ -176,6 +177,7 @@ pub mod capsule {
             &self,
             idx: usize,
         ) -> Result<rdma_binding::ibv_sge, RDMACapsuleError> {
+            #[cfg(not(disable_assert))]
             assert!(idx < self.cnt as usize);
             let capsule_ptr = unsafe { self.resp_capsules.as_ptr().add(idx) } as u64;
             let lkey = unsafe {

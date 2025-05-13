@@ -139,7 +139,7 @@ impl NvmeQueuePair {
                     std::ptr::write_volatile(self.sub_queue.doorbell as *mut u32, tail as u32);
                 }
             } else {
-                eprintln!("queue full");
+                eprintln!("queue full: qp_id {} sub_queue.tail {} cid {}", self.id << 11, self.sub_queue.tail, self.id << 11 | self.sub_queue.tail as u16);
                 return reqs;
             }
 
@@ -187,7 +187,7 @@ impl NvmeQueuePair {
                     std::ptr::write_volatile(self.sub_queue.doorbell as *mut u32, tail as u32);
                 }
             } else {
-                eprintln!("queue full");
+                eprintln!("queue full: qp_id {} sub_queue.tail {} cid {}", self.id << 11, self.sub_queue.tail, self.id << 11 | self.sub_queue.tail as u16);
                 return reqs;
             }
 
