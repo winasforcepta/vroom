@@ -4,7 +4,7 @@ use crate::memory::DmaSlice;
     use crate::rdma::buffer_manager::{BufferManager, ThreadSafeDmaHandle};
     use crate::rdma::capsule::capsule::CapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
-    use crate::rdma::rdma_common::rdma_common::{get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, Sendable, MAX_CLIENT, MAX_WR};
+    use crate::rdma::rdma_common::rdma_common::{get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError};
     use crate::rdma::rdma_common::*;
     use crate::rdma::rdma_work_manager::RdmaWorkManager;
     use crate::{NvmeDevice, NvmeQueuePair, QUEUE_LENGTH};
@@ -64,18 +64,18 @@ use crate::memory::DmaSlice;
     struct TargetRdmaContext {
         name: String,
         cm_event_channel: Arc<RdmaEventChannelPtr>,
-        cm_id: *mut rdma_binding::rdma_cm_id,
+        cm_id: *mut rdma_binding::rdma_cm_id
     }
     impl TargetRdmaContext {
         pub fn new(
             name: String,
             cm_event_channel: *mut rdma_binding::rdma_event_channel,
-            cm_id: *mut rdma_binding::rdma_cm_id,
+            cm_id: *mut rdma_binding::rdma_cm_id
         ) -> Self {
             TargetRdmaContext {
                 name,
                 cm_event_channel: Arc::from(RdmaEventChannelPtr(cm_event_channel)),
-                cm_id,
+                cm_id
             }
         }
     }
@@ -108,7 +108,8 @@ use crate::memory::DmaSlice;
         client_thread_signal: HashMap<String, Arc<AtomicBool>>,
         buffer_manager: Arc<BufferManager>,
         nvme_device_arc: Arc<Mutex<NvmeDevice>>,
-        block_size: usize
+        block_size: usize,
+        queue_depth: usize
     }
 
     fn alloc_pd() -> Result<Box<rdma_binding::ibv_pd>, RdmaTransportError> {
@@ -148,8 +149,10 @@ use crate::memory::DmaSlice;
             ipv4addr: Ipv4Addr,
             reserved_memory: usize,
             block_size: usize,
-            device_pci_addr: &String
+            device_pci_addr: &String,
+            queue_depth: usize
         ) -> Result<Self, RdmaTransportError> {
+            assert!(queue_depth <= QUEUE_LENGTH);
             let mut sockaddr = rdma_binding::sockaddr_in {
                 sin_family: libc::AF_INET as u16,
                 sin_port: 4421u16.to_be(),
@@ -237,7 +240,8 @@ use crate::memory::DmaSlice;
                 nvme_device_arc: Arc::from(Mutex::from(crate::init(&device_pci_addr).map_err(|_| {
                     RdmaTransportError::OpFailed("Failed to initiate NVMe Device".into())
                 })?)),
-                block_size
+                block_size,
+                queue_depth
             })
         }
 
@@ -276,11 +280,11 @@ use crate::memory::DmaSlice;
                             Arc::from(SendableCmEvent(cm_event_ptr))
                         };
                         let client_connection_signal = Arc::new(AtomicBool::new(true));
-                        let capsule_context = Arc::from(CapsuleContext::new(MAX_WR as u16).unwrap());
+                        let capsule_context = Arc::from(CapsuleContext::new(self.queue_depth.clone() as u16).unwrap());
                         self.client_thread_signal.insert(format!("Client-{}", client_number), Arc::clone(&client_connection_signal));
                         let base_dma_handler = self.buffer_manager.get_base_dma();
-                        let (rdma_spsc_producer, rdma_spsc_consumer): (Producer<RDMAWorkRequest>, Consumer<RDMAWorkRequest>) = make(1024);
-                        let (nvme_spsc_producer, nvme_spsc_consumer): (Producer<InternalNVMeCommandType>, Consumer<InternalNVMeCommandType>) = make(1024);
+                        let (rdma_spsc_producer, rdma_spsc_consumer): (Producer<RDMAWorkRequest>, Consumer<RDMAWorkRequest>) = make(self.queue_depth.clone());
+                        let (nvme_spsc_producer, nvme_spsc_consumer): (Producer<InternalNVMeCommandType>, Consumer<InternalNVMeCommandType>) = make(self.queue_depth.clone());
                         let is_nvme_thread_ready = Arc::new(AtomicBool::new(false));
 
                         let rdma_thread_handle = {
@@ -292,6 +296,7 @@ use crate::memory::DmaSlice;
                             let sendable_cm_event_clone = sendable_cm_event.clone();
                             let block_size = self.block_size.clone();
                             let is_nvme_thread_ready = is_nvme_thread_ready.clone();
+                            let queue_depth = self.queue_depth.clone();
 
                             thread::Builder::new()
                                 .name("RDMA Thread".into())
@@ -306,7 +311,8 @@ use crate::memory::DmaSlice;
                                         capsule_context_clone,
                                         sendable_cm_event_clone,
                                         rdma_event_channel_clone,
-                                        is_nvme_thread_ready
+                                        is_nvme_thread_ready,
+                                        queue_depth
                                     ).expect(format!("PANIC: handling RDMA thread {}", client_number.to_string()).as_str())
                                 }).expect(format!("PANIC: handling RDMA thread {}", client_number.to_string()).as_str())
                         };
@@ -422,6 +428,7 @@ use crate::memory::DmaSlice;
             cm_event: Arc<SendableCmEvent>,
             rdma_event_channel: Arc<RdmaEventChannelPtr>,
             is_nvme_thread_ready: Arc<AtomicBool>,
+            queue_depth: usize
         ) -> Result<(), RdmaTransportError> {
             #[cfg(enable_trace)]
             let thread_span = span!(Level::INFO, "RDMA Thread");
@@ -472,10 +479,10 @@ use crate::memory::DmaSlice;
             conn_param.initiator_depth = u8::MAX;
             // This tell how many outstanding requests we expect other side to handle
             conn_param.responder_resources = u8::MAX;
-            client_context = ClientRdmaContext::new(cm_id_ptr, pd_ptr, MAX_WR as u16)?;
+            client_context = ClientRdmaContext::new(cm_id_ptr, pd_ptr, queue_depth as u16)?;
 
             capsule_context.register_mr(client_context.pd).expect("PANIC: Failed to register capsule MR");
-            let mut rdma_work_manager = Arc::from(RdmaWorkManager::new(MAX_WR as u16));
+            let mut rdma_work_manager = Arc::from(RdmaWorkManager::new(queue_depth as u16));
             debug_println_verbose!("Handling client thread start.");
             let qp = client_context.get_sendable_qp();
             let cq = client_context.get_sendable_cq();

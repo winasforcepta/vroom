@@ -3,13 +3,13 @@ pub mod rdma_initiator {
     use crate::rdma::capsule::capsule::CapsuleContext;
     use crate::rdma::rdma_common::rdma_binding;
     use crate::rdma::rdma_common::rdma_common::{
-        get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError, MAX_WR,
+        get_rdma_event_type_string, process_cm_event, ClientRdmaContext, RdmaTransportError,
     };
     use crate::rdma::rdma_work_manager::RdmaWorkManager;
     use crate::debug_println_verbose;
     use std::net::Ipv4Addr;
     use std::{mem, ptr};
-    const RDMA_CM_TIMEOUT: i32 = 200000;
+    const RDMA_CM_TIMEOUT: i32 = 5 * 60 * 1000;
 
     pub struct RdmaInitiator {
         server_sockaddr: rdma_binding::sockaddr_in,
@@ -54,7 +54,8 @@ pub mod rdma_initiator {
     impl RdmaInitiator {
         pub fn connect(
             ipv4addr: Ipv4Addr,
-            port: u16
+            port: u16,
+            queue_depth: usize
         ) -> Result<Self, RdmaTransportError> {
             let err_msg: String;
             let mut server_sockaddr = rdma_binding::sockaddr_in {
@@ -192,7 +193,7 @@ pub mod rdma_initiator {
                 }
             }
 
-            let mut ctx = ClientRdmaContext::new(cm_id_ptr, pd_ptr, MAX_WR as u16)?;
+            let mut ctx = ClientRdmaContext::new(cm_id_ptr, pd_ptr, queue_depth as u16)?;
             debug_println!("resource setup: context created.");
 
             debug_println!("Trying to connect to the server");
@@ -233,8 +234,8 @@ pub mod rdma_initiator {
                 }
             }
 
-            let rwm = RdmaWorkManager::new(MAX_WR as u16);
-            let capsule_context = CapsuleContext::new(MAX_WR as u16).unwrap();
+            let rwm = RdmaWorkManager::new(queue_depth as u16);
+            let capsule_context = CapsuleContext::new(queue_depth as u16).unwrap();
             capsule_context.register_mr(pd_ptr).expect("PANIC: Failed to register capsule MR");
 
             debug_println!("The client is connected successfully");
@@ -244,7 +245,7 @@ pub mod rdma_initiator {
                 ctx,
                 rwm,
                 wr_id_to_buffer: std::iter::repeat_with(|| None)
-                    .take(MAX_WR)
+                    .take(queue_depth)
                     .collect(),
             })
         }

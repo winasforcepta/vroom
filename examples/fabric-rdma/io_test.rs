@@ -144,7 +144,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let mut transport = RdmaInitiator::connect(ipv4, 4421)
+    let mut transport = RdmaInitiator::connect(ipv4, 4421, args.queue_depth.clone() as usize)
         .expect("failed to connect to server and create transport.");
     let pd = transport.get_pd().expect("failed to get pd");
     thread::sleep(Duration::from_secs(3));

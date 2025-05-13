@@ -17,7 +17,7 @@ pub mod rdma_common {
 
     pub static MAX_SGE: u32 = 1u32;
     // 1024 to follow the VROOM constant
-    pub static MAX_WR: usize = QUEUE_LENGTH;
+    // pub static MAX_WR: usize = QUEUE_LENGTH;
     pub const MAX_CLIENT: u16 = 16u16;
     pub static CQ_CAPACITY: usize = QUEUE_LENGTH;
 
@@ -212,8 +212,8 @@ pub mod rdma_common {
                 recv_cq: cq,
                 srq: ptr::null_mut(), // optional,
                 cap: rdma_binding::ibv_qp_cap {
-                    max_send_wr: MAX_WR as u32,
-                    max_recv_wr: MAX_WR as u32,
+                    max_send_wr: max_wr as u32,
+                    max_recv_wr: max_wr as u32,
                     max_send_sge: MAX_SGE,
                     max_recv_sge: MAX_SGE,
                     max_inline_data: 1,
@@ -338,8 +338,8 @@ pub mod rdma_common {
 
             unsafe {
                 println!("Flushing WC.");
-                let mut dummy: Vec<rdma_binding::ibv_wc> = vec![mem::zeroed(); MAX_WR as usize];
-                rdma_binding::ibv_poll_cq_ex(self.cq, MAX_WR as c_int, dummy.as_mut_ptr());
+                let mut dummy: Vec<rdma_binding::ibv_wc> = vec![mem::zeroed(); QUEUE_LENGTH];
+                rdma_binding::ibv_poll_cq_ex(self.cq, QUEUE_LENGTH as c_int, dummy.as_mut_ptr());
                 println!("WC is flushed");
             }
 

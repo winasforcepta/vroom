@@ -166,7 +166,7 @@ fn main() {
             let mut transport = {
                 let _guard = connection_mtx.lock().unwrap();
                 println!("Client {} is connecting.", i);
-                RdmaInitiator::connect(ipv4, 4421)
+                RdmaInitiator::connect(ipv4, 4421, quota)
                     .expect("failed to connect to server and create transport.")
             };
             println!("Client {} is connected.", i);

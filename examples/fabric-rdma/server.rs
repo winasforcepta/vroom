@@ -21,6 +21,9 @@ struct Args {
     /// Block size in bytes
     #[arg(long = "block-size", default_value_t = 512)]
     block_size: usize,
+
+    #[arg(long = "queue-depth", default_value_t = 128)]
+    queue_depth: usize,
 }
 fn read() {
     // println!("read data from NVMe ctrl");
@@ -45,7 +48,7 @@ fn main() {
         }
     };
 
-    let mut target = RdmaTarget::new(ipv4, reserved_bytes, block_size, &pci_addr).expect("Failed to create RDMA target");
+    let mut target = RdmaTarget::new(ipv4, reserved_bytes, block_size, &pci_addr, args.queue_depth.clone()).expect("Failed to create RDMA target");
     println!("Server is listening");
     target.run().expect("Fails to start RDMA target.");
 }
