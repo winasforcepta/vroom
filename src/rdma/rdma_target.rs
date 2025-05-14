@@ -572,9 +572,7 @@ use crate::memory::DmaSlice;
             }
 
             // now, run the thread loop
-            let mut any_inflight_wr = rdma_work_manager.any_inflight_wr();
-
-            while running_signal.load(Ordering::SeqCst) || any_inflight_wr {
+            while running_signal.load(Ordering::SeqCst) {
                 while let Some(rdma_wr) = rdma_spsc_consumer.try_pop() {
                     let mode = rdma_wr.mode.unwrap();
                     match mode {
@@ -791,8 +789,6 @@ use crate::memory::DmaSlice;
                         _ => {}
                     }
                 }
-
-                any_inflight_wr = rdma_work_manager.any_inflight_wr();
             }
 
             Ok(())

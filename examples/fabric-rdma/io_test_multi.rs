@@ -163,6 +163,7 @@ fn main() {
         let not_ready_clients = not_ready_clients.clone();
 
         let handle = thread::spawn(move || {
+            let max_quota = quota;
             let mut hist: Histogram<u64> = Histogram::new_with_bounds(1u64, 300_000_000_000u64, 3).unwrap();
             let mut transport = {
                 let _guard = connection_mtx.lock().unwrap();
@@ -213,9 +214,9 @@ fn main() {
             let mut total = Duration::ZERO;
             let mut total_io = 0;
             let mut step = 0usize;
+            let before = Instant::now();
 
             while total < duration {
-                let before = Instant::now();
                 while quota > 0 {
                     quota -= 1;
                     let lba = lbas[step];
@@ -252,11 +253,28 @@ fn main() {
                     hist.record(latency.max(1)).unwrap() // avoid 0
                 }
                 quota = quota + (ns + nf) as usize;
-                let elapsed = before.elapsed();
-                total += elapsed;
+                total = before.elapsed();
                 if nf > 0 {
                     eprintln!("Error I/O occurred!");
                     break;
+                }
+            }
+
+            let mut retry = 1000;
+            while quota < max_quota && retry > 0{
+                let (ns, nf) = transport.poll_completions_reset().unwrap();
+                #[cfg(any(debug_mode, debug_mode_verbose))]
+                debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
+                total_io += (ns + nf) as usize;
+
+                for _i in 0..(ns + nf) {
+                    let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
+                    hist.record(latency.max(1)).unwrap() // avoid 0
+                }
+                quota = quota + (ns + nf) as usize;
+                total = before.elapsed();
+                if ns + nf == 0 {
+                    retry = retry - 1;
                 }
             }
 
