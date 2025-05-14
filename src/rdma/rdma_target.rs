@@ -572,7 +572,7 @@ use crate::memory::DmaSlice;
             }
 
             // now, run the thread loop
-            while running_signal.load(Ordering::SeqCst) {
+            while running_signal.load(Ordering::Acquire) {
                 while let Some(rdma_wr) = rdma_spsc_consumer.try_pop() {
                     let mode = rdma_wr.mode.unwrap();
                     match mode {
@@ -608,7 +608,7 @@ use crate::memory::DmaSlice;
                 let n = rdma_work_manager.try_poll_completed_works(&cq).unwrap();
 
                 if n == 0 {
-                    spin_loop();
+                    // spin_loop();
                     continue;
                 }
 
@@ -671,7 +671,7 @@ use crate::memory::DmaSlice;
                         if op_code == rdma_binding::ibv_wc_opcode_IBV_WC_RECV {
                             // client might be disconnected
                             if wc_status == rdma_binding::ibv_wc_status_IBV_WC_WR_FLUSH_ERR {
-                                running_signal.store(false, Ordering::SeqCst);
+                                running_signal.store(false, Ordering::Release);
                             }
                             continue;
                         }
@@ -814,7 +814,7 @@ use crate::memory::DmaSlice;
             let mut inflight_cmd_cnt: [(usize, bool); QUEUE_LENGTH] = std::array::from_fn(|_| (0, false)); // .1 = is_fail
             is_nvme_thread_ready.store(true, Ordering::SeqCst);
 
-            while running_signal.load(Ordering::SeqCst) {
+            while running_signal.load(Ordering::Acquire) {
                 let mut current_command;
                 #[cfg(enable_trace)]
                 let guard = span!(Level::INFO, "SPSC pop").entered();
