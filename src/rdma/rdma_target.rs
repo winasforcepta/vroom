@@ -605,9 +605,9 @@ use crate::memory::DmaSlice;
                     }
                 }
 
-                let any_completion = rdma_work_manager.try_poll_completed_works(&cq).unwrap();
+                let n = rdma_work_manager.try_poll_completed_works(&cq).unwrap();
 
-                if !any_completion {
+                if n == 0 {
                     spin_loop();
                     continue;
                 }

@@ -371,43 +371,41 @@ impl RdmaWorkManager {
     pub fn try_poll_completed_works(
         &self,
         cq: &Sendable<rdma_binding::ibv_cq>,
-    ) -> Result<bool, WorkManagerError> {
+    ) -> Result<usize, WorkManagerError> {
         #[cfg(enable_trace)]
         let span = span!(Level::INFO, "RdmaWorkManager.try_poll_completed_works");
         #[cfg(enable_trace)]
         let _ = span.enter();
-        let poll = |label: &str| -> Result<u16, WorkManagerError> {
-            unsafe {
-                let num_polled = rdma_binding::ibv_poll_cq_ex(
-                    (*cq).as_ptr(),
-                    MAX_COMPLETION_EVENT as c_int,
-                    self.received_wcs.as_ptr() as *mut rdma_binding::ibv_wc,
-                );
-                if num_polled < 0 {
-                    return Err(WorkManagerError::OperationFailed(format!(
-                        "ibv_poll_cq_ex returns < 0: {}",
-                        num_polled
-                    )));
-                }
-                Ok(num_polled as u16)
-            }
-        };
-        let mut n = 0u16;
-        n = poll("try polling")?;
+        let mut num_polled = 0;
 
-        if n == 0 {
-            return Ok(false);
+        unsafe {
+            num_polled = rdma_binding::ibv_poll_cq_ex(
+                (*cq).as_ptr(),
+                MAX_COMPLETION_EVENT as c_int,
+                self.received_wcs.as_ptr() as *mut rdma_binding::ibv_wc,
+            );
+
+            if num_polled < 0 {
+                return Err(WorkManagerError::OperationFailed(format!(
+                    "ibv_poll_cq_ex returns < 0: {}",
+                    num_polled
+                )));
+            }
+        }
+
+        if num_polled == 0 {
+            return Ok(0);
         }
 
         unsafe {
-            *self.n_completed_work.get() = n;
+            *self.n_completed_work.get() = num_polled as u16;
             *self.first_unprocessed_wc_index.get() = 0;
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("poll_completed_works: ACK {} WC", n);
-            rdma_binding::ibv_ack_cq_events((*cq).as_ptr(), n as c_uint);
+            rdma_binding::ibv_ack_cq_events((*cq).as_ptr(), num_polled as c_uint);
         }
 
-        Ok(true)
+        Ok(num_polled as usize)
     }
 
     pub fn request_for_notification(

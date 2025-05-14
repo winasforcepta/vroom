@@ -400,10 +400,10 @@ pub mod rdma_initiator {
         pub fn poll_completions_reset(&mut self) -> Result<(u16, u16), RdmaTransportError> {
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("Polling completion...");
-            self.rwm
+            let n = self.rwm
                 .try_poll_completed_works(&self.ctx.get_sendable_cq())
                 .unwrap();
-            if !self.rwm.is_not_empty() {
+            if n == 0 {
                 return Ok((0, 0))
             }
             Ok(self.rwm.reset_wc())
