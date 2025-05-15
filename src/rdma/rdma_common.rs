@@ -195,7 +195,7 @@ use core::slice::SlicePattern;
             unsafe {
                 cq = rdma_binding::ibv_create_cq(
                     verb,                 /* which device */
-                    CQ_CAPACITY as c_int, /* maximum capacity*/
+                    (max_wr * 2) as c_int, /* maximum capacity*/
                     ptr::null_mut(),      /* user context, not used here */
                     io_comp_channel,      /* which IO completion channel */
                     0,                    /* signaling vector, not used here*/
@@ -214,8 +214,8 @@ use core::slice::SlicePattern;
                 recv_cq: cq,
                 srq: ptr::null_mut(), // optional,
                 cap: rdma_binding::ibv_qp_cap {
-                    max_send_wr: max_wr as u32 * 2,
-                    max_recv_wr: max_wr as u32 * 2,
+                    max_send_wr: max_wr as u32,
+                    max_recv_wr: max_wr as u32,
                     max_send_sge: MAX_SGE,
                     max_recv_sge: MAX_SGE,
                     max_inline_data: 1,
