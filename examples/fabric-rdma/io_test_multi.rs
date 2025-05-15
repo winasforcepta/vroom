@@ -3,13 +3,13 @@ use hdrhistogram::Histogram;
 use libc::size_t;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::alloc::{alloc, Layout};
+use std::alloc::{alloc, dealloc, Layout};
 use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use std::{fmt, thread};
+use std::{fmt, ptr, thread};
 use std::sync::{Arc, Mutex};
 #[cfg(any(debug_mode, debug_mode_verbose))]
 use vroom::debug_println_verbose;
@@ -180,6 +180,15 @@ fn main() {
             let total_size = args.queue_depth * args.block_size;
             let buffer_layout = Layout::from_size_align(total_size as usize, 4).unwrap();
             let io_buffer = unsafe { alloc(buffer_layout) };
+            if io_buffer.is_null() {
+                panic!("failed to allocate buffer");
+            }
+            unsafe {
+                ptr::write_bytes(io_buffer, 0, total_size as usize);
+                if libc::mlock(io_buffer as *const _, total_size as size_t) != 0 {
+                    panic!("failed to mlock");
+                }
+            }
             let buffer_mr = unsafe {
                 rdma_binding::ibv_reg_mr(
                     pd,
@@ -272,6 +281,11 @@ fn main() {
             // }
 
             let bw = (total_io * block_size as usize) as f64 / total.as_secs_f64();
+            unsafe {
+                let _ = libc::munlock(io_buffer as *const _, total_size as size_t);
+                dealloc(io_buffer, buffer_layout);
+            }
+
             println!("Client {} is done.", i);
 
             (hist, bw, total.as_secs_f64())

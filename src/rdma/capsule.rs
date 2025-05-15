@@ -8,6 +8,7 @@ pub mod capsule {
     use std::{fmt, mem, ptr};
     use std::cell::UnsafeCell;
     use std::sync::{Arc, Mutex};
+    use libc::munlock;
     use tracing::span;
     use tracing::Level;
 
@@ -15,6 +16,7 @@ pub mod capsule {
     pub enum RDMACapsuleError {
         FailedRDMAMemoryRegionAllocation(usize, String),
         FailedRDMASGERegionAllocation(usize, String),
+        Generic(String),
         InvalidIndex,
     }
     impl fmt::Display for RDMACapsuleError {
@@ -29,6 +31,10 @@ pub mod capsule {
                     f,
                     "Failed to allocate SGE for capsule[{}]: {}",
                     idx, original_msg
+                ),
+                RDMACapsuleError::Generic(message) => write!(
+                    f,
+                    "message",
                 ),
                 &RDMACapsuleError::InvalidIndex => write!(
                     f,
@@ -117,6 +123,25 @@ pub mod capsule {
             let mut resp_capsules = (0..n)
                 .map(|_| UnsafeCell::new(NVMeResponseCapsule::zeroed()))
                 .collect::<Vec<_>>();
+
+            let req_capsule_ptr = req_capsules.as_ptr();
+            if req_capsule_ptr.is_null() {
+                return Err(RDMACapsuleError::Generic("Request capsule buffer is not properly initialized.".to_string()));
+            }
+            let resp_capsule_ptr = resp_capsules.as_ptr();
+            if resp_capsule_ptr.is_null() {
+                return Err(RDMACapsuleError::Generic("Response capsule buffer is not properly initialized.".to_string()));
+            }
+
+            unsafe {
+                if libc::mlock(req_capsule_ptr as *const _, req_capsules.len() * mem::size_of::<NVMeCapsule>()) != 0 {
+                    return Err(RDMACapsuleError::Generic("Failed to pin request capsules buffer".to_string()));
+                }
+
+                if libc::mlock(resp_capsule_ptr as *const _, resp_capsules.len() * mem::size_of::<NVMeResponseCapsule>()) != 0 {
+                    return Err(RDMACapsuleError::Generic("Failed to pin response capsules buffer".to_string()));
+                }
+            }
 
 
             Ok(Self {
@@ -255,6 +280,17 @@ pub mod capsule {
                 capsule.data_mr_length.clone(),
                 capsule.data_mr_r_key.clone()
             ))
+        }
+    }
+
+    impl Drop for CapsuleContext {
+        fn drop(&mut self) {
+            unsafe {
+                let req_capsule_ptr = self.req_capsules.as_ptr();
+                let _ = munlock(req_capsule_ptr as *const _, self.req_capsules.len() * mem::size_of::<NVMeCapsule>());
+                let resp_capsule_ptr = self.resp_capsules.as_ptr();
+                let _ = munlock(resp_capsule_ptr as *const _, self.resp_capsules.len() * mem::size_of::<NVMeResponseCapsule>());
+            }
         }
     }
 }
