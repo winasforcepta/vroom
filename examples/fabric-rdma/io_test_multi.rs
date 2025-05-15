@@ -260,28 +260,28 @@ fn main() {
                 }
             }
 
-            let mut retry: i64 = 1 << 20;
+            // let mut retry: i64 = 1 << 20;
             println!("Time out with {} inflight I/O after completing {} I/O. Draining...", max_quota - quota, total_io.clone());
-            while quota < max_quota {
-                if retry == 0 {
-                    println!("{} remaining. Draining...", max_quota - quota);
-                    retry = 1 << 15;
-                }
-                let (ns, nf) = transport.poll_completions_reset().unwrap();
-                #[cfg(any(debug_mode, debug_mode_verbose))]
-                debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
-                total_io += (ns + nf) as usize;
-
-                for _i in 0..(ns + nf) {
-                    let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
-                    hist.record(latency.max(1)).unwrap() // avoid 0
-                }
-                quota = quota + (ns + nf) as usize;
-                total = before.elapsed();
-                if ns + nf == 0 {
-                    retry = retry - 1;
-                }
-            }
+            // while quota < max_quota {
+            //     if retry == 0 {
+            //         println!("{} remaining. Draining...", max_quota - quota);
+            //         retry = 1 << 15;
+            //     }
+            //     let (ns, nf) = transport.poll_completions_reset().unwrap();
+            //     #[cfg(any(debug_mode, debug_mode_verbose))]
+            //     debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
+            //     total_io += (ns + nf) as usize;
+            //
+            //     for _i in 0..(ns + nf) {
+            //         let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
+            //         hist.record(latency.max(1)).unwrap() // avoid 0
+            //     }
+            //     quota = quota + (ns + nf) as usize;
+            //     total = before.elapsed();
+            //     if ns + nf == 0 {
+            //         retry = retry - 1;
+            //     }
+            // }
 
             let bw = (total_io * block_size as usize) as f64 / total.as_secs_f64();
             println!("Client {} is done.", i);

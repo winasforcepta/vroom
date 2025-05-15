@@ -152,7 +152,7 @@ use crate::memory::DmaSlice;
             device_pci_addr: &String,
             queue_depth: usize
         ) -> Result<Self, RdmaTransportError> {
-            assert!(queue_depth <= QUEUE_LENGTH * 2);
+            assert!(queue_depth <= QUEUE_LENGTH);
             let mut sockaddr = rdma_binding::sockaddr_in {
                 sin_family: libc::AF_INET as u16,
                 sin_port: 4421u16.to_be(),
