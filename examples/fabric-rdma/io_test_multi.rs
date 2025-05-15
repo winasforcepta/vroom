@@ -177,35 +177,21 @@ fn main() {
             let lbas = generate_lba_offsets(ns_size_bytes, block_size as u64, workload == Workload::Random);
             let io_write_mode = generate_mode_is_write(ns_size_bytes, block_size as u64, mode);
 
-            let write_io_buffer_layout = Layout::from_size_align(args.block_size as usize, 1).unwrap();
-            let write_io_buffer = unsafe { alloc(write_io_buffer_layout) };
-            let write_buffer_mr = unsafe {
+            let total_size = args.queue_depth * args.block_size;
+            let buffer_layout = Layout::from_size_align(total_size as usize, 4).unwrap();
+            let io_buffer = unsafe { alloc(buffer_layout) };
+            let buffer_mr = unsafe {
                 rdma_binding::ibv_reg_mr(
                     pd,
-                    write_io_buffer as *mut c_void,
-                    args.block_size as size_t,
+                    io_buffer as *mut c_void,
+                    total_size as size_t,
                     (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
                         | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
                         | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
                         as c_int,
                 )
             };
-            let write_io_buffer_rkey = unsafe { (*write_buffer_mr).rkey };
-
-            let read_io_buffer_layout = Layout::from_size_align(args.block_size as usize, 1).unwrap();
-            let read_io_buffer = unsafe { alloc(read_io_buffer_layout) };
-            let read_buffer_mr = unsafe {
-                rdma_binding::ibv_reg_mr(
-                    pd,
-                    read_io_buffer as *mut c_void,
-                    args.block_size as size_t,
-                    (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
-                        | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
-                        | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
-                        as c_int,
-                )
-            };
-            let read_io_buffer_rkey = unsafe { (*read_buffer_mr).rkey };
+            let buffer_rkey = unsafe { (*buffer_mr).rkey };
             not_ready_clients.fetch_sub(1, Ordering::SeqCst);
             println!("Client {} is ready.", i);
             while not_ready_clients.load(Ordering::SeqCst) > 0 {}
@@ -214,6 +200,7 @@ fn main() {
             let mut total = Duration::ZERO;
             let mut total_io = 0;
             let mut step = 0usize;
+            let mut cur_idx = 0usize;
             let before = Instant::now();
 
             while total < duration {
@@ -222,25 +209,26 @@ fn main() {
                     let lba = lbas[step];
                     let is_write_mode = io_write_mode[step];
                     match is_write_mode {
-                        true => {
+                        true => unsafe {
                             #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("post_remote_io_write");
                             per_io_time_tracker.push_back(Instant::now());
                             transport
-                                .post_remote_io_write(step as u16, lba, write_io_buffer, args.block_size, write_io_buffer_rkey)
+                                .post_remote_io_write(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
                                 .expect("failed to post remote_io_write");
                         }
-                        false => {
+                        false => unsafe {
                             #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("post_remote_io_read");
                             per_io_time_tracker.push_back(Instant::now());
                             transport
-                                .post_remote_io_read(step as u16, lba, read_io_buffer, args.block_size, read_io_buffer_rkey)
+                                .post_remote_io_read(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
                                 .expect("failed to post remote_io_read");
                         }
                     }
 
                     step = (step + 1) % lbas.len();
+                    cur_idx = (cur_idx + 1) % args.queue_depth as usize;
                 }
 
                 let (ns, nf) = transport.poll_completions_reset().unwrap();
