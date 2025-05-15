@@ -21,7 +21,7 @@ use core::slice::SlicePattern;
     // 1024 to follow the VROOM constant
     // pub static MAX_WR: usize = QUEUE_LENGTH;
     pub const MAX_CLIENT: u16 = 16u16;
-    pub static CQ_CAPACITY: usize = QUEUE_LENGTH;
+    pub static CQ_CAPACITY: usize = QUEUE_LENGTH * 2;
 
     pub struct Sendable<T> {
         ptr: ptr::NonNull<T>,
@@ -214,8 +214,8 @@ use core::slice::SlicePattern;
                 recv_cq: cq,
                 srq: ptr::null_mut(), // optional,
                 cap: rdma_binding::ibv_qp_cap {
-                    max_send_wr: max_wr as u32,
-                    max_recv_wr: max_wr as u32,
+                    max_send_wr: max_wr as u32 * 2,
+                    max_recv_wr: max_wr as u32 * 2,
                     max_send_sge: MAX_SGE,
                     max_recv_sge: MAX_SGE,
                     max_inline_data: 1,

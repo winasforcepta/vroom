@@ -152,7 +152,7 @@ use crate::memory::DmaSlice;
             device_pci_addr: &String,
             queue_depth: usize
         ) -> Result<Self, RdmaTransportError> {
-            assert!(queue_depth <= QUEUE_LENGTH);
+            assert!(queue_depth <= QUEUE_LENGTH * 2);
             let mut sockaddr = rdma_binding::sockaddr_in {
                 sin_family: libc::AF_INET as u16,
                 sin_port: 4421u16.to_be(),
@@ -291,8 +291,8 @@ use crate::memory::DmaSlice;
                         let capsule_context = Arc::from(CapsuleContext::new(self.queue_depth.clone() as u16).unwrap());
                         self.client_thread_signal.insert(format!("Client-{}", client_number), Arc::clone(&client_connection_signal));
                         let base_dma_handler = self.buffer_manager.get_base_dma();
-                        let (rdma_spsc_producer, rdma_spsc_consumer): (Producer<RDMAWorkRequest>, Consumer<RDMAWorkRequest>) = make(self.queue_depth.clone());
-                        let (nvme_spsc_producer, nvme_spsc_consumer): (Producer<InternalNVMeCommandType>, Consumer<InternalNVMeCommandType>) = make(self.queue_depth.clone());
+                        let (rdma_spsc_producer, rdma_spsc_consumer): (Producer<RDMAWorkRequest>, Consumer<RDMAWorkRequest>) = make(self.queue_depth.clone() * 2);
+                        let (nvme_spsc_producer, nvme_spsc_consumer): (Producer<InternalNVMeCommandType>, Consumer<InternalNVMeCommandType>) = make(self.queue_depth.clone() * 2);
                         let is_nvme_thread_ready = Arc::new(AtomicBool::new(false));
 
                         let rdma_thread_handle = {
@@ -810,7 +810,6 @@ use crate::memory::DmaSlice;
             #[cfg(enable_trace)]
             let _s = s.enter();
             let mut c_id_to_offset_map: Vec<Option<usize>> = vec![None; QUEUE_LENGTH];
-            let mut empty_result_cnt = 0usize;
             let mut inflight_cmd_cnt: [(usize, bool); QUEUE_LENGTH] = std::array::from_fn(|_| (0, false)); // .1 = is_fail
             is_nvme_thread_ready.store(true, Ordering::SeqCst);
 
@@ -823,7 +822,6 @@ use crate::memory::DmaSlice;
                     let s = span!(Level::INFO, "Submit NVMe I/O");
                     #[cfg(enable_trace)]
                     let _s = s.enter();
-                    empty_result_cnt = 0;
                     current_command = command;
                     let (c_id, start_offset, lba, write, size) = current_command;
                     c_id_to_offset_map[c_id as usize] = Some(start_offset);
@@ -842,13 +840,16 @@ use crate::memory::DmaSlice;
                         inflight_cmd_cnt[c_id as usize].1 = false;
                     }
                 }
+                #[cfg(enable_trace)]
+                drop(guard);
 
+                #[cfg(enable_trace)]
+                let guard = span!(Level::INFO, "nvme_queue_pair.quick_poll").entered();
                 while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
                     #[cfg(enable_trace)]
                     let s = span!(Level::INFO, "On NVMe Completion found");
                     #[cfg(enable_trace)]
                     let _s = s.enter();
-                    empty_result_cnt = 0; // if find any, reset the counter
                     #[cfg(any(debug_mode, debug_mode_verbose))]
                     debug_println!("[NVMe Device Thread] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
                     let wr_id = completion.c_id & 0x7FF;
@@ -956,6 +957,8 @@ use crate::memory::DmaSlice;
                         _ => {}
                     }
                 }
+                #[cfg(enable_trace)]
+                drop(guard);
             }
 
             Ok(0)

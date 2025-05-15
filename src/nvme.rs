@@ -6,6 +6,7 @@ use crate::{NvmeNamespace, NvmeStats, HUGE_PAGE_SIZE};
 use std::collections::HashMap;
 use std::error::Error;
 use std::hint::spin_loop;
+use tracing::{span, Dispatch, Level};
 
 // clippy doesnt like this
 #[allow(unused, clippy::upper_case_acronyms)]
@@ -241,6 +242,10 @@ impl NvmeQueuePair {
     }
 
     pub fn quick_poll_completion(&mut self) -> Option<NvmeCompletion> {
+        #[cfg(enable_trace)]
+        let s = span!(Level::INFO, "NvmeQueuePair.quick_poll_completion");
+        #[cfg(enable_trace)]
+        let _s = s.enter();
         if let Some((tail, c_entry, _)) = self.comp_queue.complete() {
             unsafe {
                 std::ptr::write_volatile(self.comp_queue.doorbell as *mut u32, tail as u32);

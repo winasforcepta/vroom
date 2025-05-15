@@ -260,8 +260,13 @@ fn main() {
                 }
             }
 
-            let mut retry = 1000;
-            while quota < max_quota && retry > 0{
+            let mut retry: i64 = 1 << 20;
+            println!("Time out with {} inflight I/O after completing {} I/O. Draining...", max_quota - quota, total_io.clone());
+            while quota < max_quota {
+                if retry == 0 {
+                    println!("{} remaining. Draining...", max_quota - quota);
+                    retry = 1 << 15;
+                }
                 let (ns, nf) = transport.poll_completions_reset().unwrap();
                 #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
@@ -319,5 +324,5 @@ fn main() {
                  bandwidth, io_per_sec, latency_min, latency_percentile_25,
                  latency_percentile_50, latency_percentile_75, latency_percentile_90,
                  latency_percentile_99, latency_max);
-    println!("total I/O: {}", global_histogram.len());
+    println!("total I/O: {}. Total time: {}", global_histogram.len(), max_runtime);
 }
