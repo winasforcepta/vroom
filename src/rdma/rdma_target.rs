@@ -852,13 +852,13 @@ use crate::memory::DmaSlice;
                     let _s = s.enter();
                     #[cfg(any(debug_mode, debug_mode_verbose))]
                     debug_println!("[NVMe Device Thread] I/O is completed. cid = {}, status = {}", completion.c_id as u16, (completion.status >> 1) as u16);
-                    let wr_id = completion.c_id & 0x7FF;
+                    let c_id = completion.c_id & 0x7FF;
                     let status = (completion.status >> 1) as i16;
 
-                    inflight_cmd_cnt[wr_id as usize].0 -= 1;
-                    inflight_cmd_cnt[wr_id as usize].1 |= status != 0;
+                    inflight_cmd_cnt[c_id as usize].0 -= 1;
+                    inflight_cmd_cnt[c_id as usize].1 |= status != 0;
 
-                    if inflight_cmd_cnt[wr_id as usize].0 > 0 {
+                    if inflight_cmd_cnt[c_id as usize].0 > 0 {
                         continue;
                     }
 
@@ -867,9 +867,9 @@ use crate::memory::DmaSlice;
 
                     let (opcode, virtual_addr, r_key, data_len, resp_sge) = {
                         let (cmd, lba, virtual_addr, data_len, r_key) = capsule_context
-                            .get_request_capsule_content(wr_id as usize)
+                            .get_request_capsule_content(c_id as usize)
                             .unwrap();
-                        let resp_sge = capsule_context.get_resp_sge(wr_id as usize).unwrap();
+                        let resp_sge = capsule_context.get_resp_sge(c_id as usize).unwrap();
                         (cmd.opcode.clone(), virtual_addr, r_key, data_len, resp_sge)
                     };
 
@@ -882,19 +882,19 @@ use crate::memory::DmaSlice;
                             #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("[NVMe Device Thread] processing write I/O completion ....");
                             {
-                                let mut capsule = capsule_context.get_resp_capsule(wr_id as usize).unwrap();
+                                let mut capsule = capsule_context.get_resp_capsule(c_id as usize).unwrap();
                                 let status_code = {
-                                    match inflight_cmd_cnt[wr_id as usize].1 {
+                                    match inflight_cmd_cnt[c_id as usize].1 {
                                         true => 1,
                                         false => 0,
                                     }
                                 };
                                 capsule.status = status_code;
-                                capsule.cmd_id = wr_id;
+                                capsule.cmd_id = c_id;
                             }
 
                             rdma_spsc_producer.push(RDMAWorkRequest {
-                                wr_id,
+                                wr_id: c_id,
                                 sge: resp_sge,
                                 mode: Some(rdma_binding::ibv_wr_opcode_IBV_WR_SEND),
                                 remote_info: None,
@@ -906,7 +906,7 @@ use crate::memory::DmaSlice;
                             #[cfg(enable_trace)]
                             let _s = s.enter();
 
-                            match inflight_cmd_cnt[wr_id as usize].1 {
+                            match inflight_cmd_cnt[c_id as usize].1 {
                                 true => {
                                     // do RDMA send
                                     #[cfg(enable_trace)]
@@ -916,27 +916,27 @@ use crate::memory::DmaSlice;
                                     #[cfg(any(debug_mode, debug_mode_verbose))]
                                     debug_println_verbose!("[NVMe Device Thread] processing read I/O completion ....");
                                     {
-                                        let mut capsule = capsule_context.get_resp_capsule(wr_id as usize).unwrap();
+                                        let mut capsule = capsule_context.get_resp_capsule(c_id as usize).unwrap();
                                         let status_code = {
-                                            match inflight_cmd_cnt[wr_id as usize].1 {
+                                            match inflight_cmd_cnt[c_id as usize].1 {
                                                 true => 1,
                                                 false => 0,
                                             }
                                         };
                                         capsule.status = status_code;
-                                        capsule.cmd_id = wr_id;
+                                        capsule.cmd_id = c_id;
                                     }
 
                                     rdma_spsc_producer.push(RDMAWorkRequest {
-                                        wr_id,
+                                        wr_id: c_id,
                                         sge: resp_sge,
                                         mode: Some(rdma_binding::ibv_wr_opcode_IBV_WR_SEND),
                                         remote_info: None,
                                     });
                                 },
                                 false => {
-                                    let offset = c_id_to_offset_map[wr_id as usize].unwrap_or_else(|| {
-                                        eprintln!("c_id_to_offset_map[wr_id] Got None! Debug info: {:?}", wr_id);
+                                    let offset = c_id_to_offset_map[c_id as usize].unwrap_or_else(|| {
+                                        eprintln!("c_id_to_offset_map[c_id] Got None! Debug info: c_id = {:?}", c_id);
                                         panic!("Unwrapped None");
                                     });;
                                     let mut local_sge = unsafe {
@@ -948,12 +948,12 @@ use crate::memory::DmaSlice;
                                     };
 
                                     rdma_spsc_producer.push(RDMAWorkRequest {
-                                        wr_id,
+                                        wr_id: c_id,
                                         sge: local_sge,
                                         mode: Some(rdma_binding::ibv_wr_opcode_IBV_WR_RDMA_WRITE),
                                         remote_info: Some((virtual_addr, r_key)),
                                     });
-                                    c_id_to_offset_map[wr_id as usize] = None;
+                                    c_id_to_offset_map[c_id as usize] = None;
                                 },
                             }
                         },
