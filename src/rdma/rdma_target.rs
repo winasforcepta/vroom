@@ -935,7 +935,10 @@ use crate::memory::DmaSlice;
                                     });
                                 },
                                 false => {
-                                    let offset = c_id_to_offset_map[wr_id as usize].unwrap();
+                                    let offset = c_id_to_offset_map[wr_id as usize].unwrap_or_else(|| {
+                                        eprintln!("c_id_to_offset_map[wr_id] Got None! Debug info: {:?}", wr_id);
+                                        panic!("Unwrapped None");
+                                    });;
                                     let mut local_sge = unsafe {
                                         rdma_binding::ibv_sge {
                                             addr: base_dma.virt.add(offset) as u64,
