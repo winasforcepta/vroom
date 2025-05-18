@@ -49,6 +49,7 @@ fn main() {
         .allowlist_function("ibv_create_comp_channel")
         .allowlist_function("ibv_create_cq")
         .allowlist_function("ibv_dealloc_pd")
+        .allowlist_function("ibv_query_qp")
         .allowlist_function("ibv_dereg_mr")
         .allowlist_function("ibv_destroy_comp_channel")
         .allowlist_function("ibv_destroy_cq")

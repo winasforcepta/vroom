@@ -32,3 +32,7 @@ int ibv_req_notify_cq_ex(struct ibv_cq *cq, int solicited_only) {
 int ibv_get_cq_event_ex(struct ibv_comp_channel *channel, struct ibv_cq **cq, void **cq_context) {
     return ibv_get_cq_event(channel, cq, cq_context);
 }
+
+int ibv_query_qp_ex(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask, struct ibv_qp_init_attr *init_attr) {
+    return ibv_query_qp(qp, attr, attr_mask, init_attr);
+}

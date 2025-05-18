@@ -151,8 +151,8 @@ fn main() {
     };
 
     let mut handles = vec![];
-    let mut not_ready_clients = Arc::from(AtomicUsize::new(args.client.clone() as usize));
-    let mut connection_mtx = Arc::from(Mutex::new(true));
+    let not_ready_clients = Arc::from(AtomicUsize::new(args.client.clone() as usize));
+    let connection_mtx = Arc::from(Mutex::new(true));
 
     for i in 0..args.client {
         let connection_mtx = connection_mtx.clone();

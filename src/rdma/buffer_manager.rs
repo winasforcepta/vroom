@@ -196,8 +196,8 @@ impl From<&Dma<u8>> for ThreadSafeDmaHandle {
 
 impl ThreadSafeDmaHandle {
     pub unsafe fn to_dma(&self) -> Dma<u8> {
-        #[cfg(any(debug_mode, debug_mode_verbose))]
-        debug_println_verbose!("[DEBUG TRANSFORM ThreadSafeDmaHandle -> DMA] virt: {}, phy: {}, size: {}", self.virt as u64, self.phys as u64, self.size);
+        // #[cfg(any(debug_mode, debug_mode_verbose))]
+        // debug_println_verbose!("[DEBUG TRANSFORM ThreadSafeDmaHandle -> DMA] virt: {}, phy: {}, size: {}", self.virt as u64, self.phys as u64, self.size);
         Dma::from_raw_parts(self.virt, self.phys, self.size)
     }
 }

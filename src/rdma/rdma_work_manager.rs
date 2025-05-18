@@ -13,6 +13,8 @@ use crossbeam::queue::ArrayQueue;
 use tracing::span;
 use crate::rdma::rdma_common::rdma_common::Sendable;
 
+pub const IBV_QP_STATE: ::std::os::raw::c_int = 0x00000001;
+
 #[derive(Debug)]
 pub enum WorkManagerError {
     InvalidWrId(u16),
@@ -452,15 +454,37 @@ impl RdmaWorkManager {
         };
 
         unsafe {
-            let ret = rdma_binding::ibv_post_recv_ex((*qp).as_ptr(), &mut wr, &mut bad_client_recv_wr);
-            if ret != 0 {
+            let mut attr = std::mem::zeroed::<rdma_binding::ibv_qp_attr>();
+            let mut init_attr = std::mem::zeroed::<rdma_binding::ibv_qp_init_attr>();
+            let rc = unsafe {
+                rdma_binding::ibv_query_qp(qp.as_ptr(), &mut attr, IBV_QP_STATE, &mut init_attr)
+            };
+
+            if rc != 0 {
                 return Err(WorkManagerError::OperationFailed(
-                    "Failed to post rcv work".into(),
+                    "post_rcv_req_work: Failed to query QP state".into(),
                 ));
             }
-        }
 
-        // self.request_for_notification(cq)?;
+
+            match attr.qp_state {
+                rdma_binding::ibv_qp_state_IBV_QPS_INIT |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTR |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTS => {
+                    let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
+                    if ret != 0 {
+                        return Err(WorkManagerError::OperationFailed(
+                            "Failed to post rcv work".into(),
+                        ));
+                    }
+                }
+                other => {
+                    return Err(WorkManagerError::OperationFailed(
+                        format!("post_rcv_req_work: Unexpected QP state: {other}").into(),
+                    ));
+                }
+            }
+        }
 
         Ok(wr_id)
     }
@@ -497,11 +521,35 @@ impl RdmaWorkManager {
                     "post_send_response_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
-            let ret = rdma_binding::ibv_post_send_ex((*qp).as_ptr(), &mut wr, &mut bad_client_send_wr);
-            if ret != 0 {
+            let mut attr = std::mem::zeroed::<rdma_binding::ibv_qp_attr>();
+            let mut init_attr = std::mem::zeroed::<rdma_binding::ibv_qp_init_attr>();
+            let rc = unsafe {
+                rdma_binding::ibv_query_qp(qp.as_ptr(), &mut attr, IBV_QP_STATE, &mut init_attr)
+            };
+
+            if rc != 0 {
                 return Err(WorkManagerError::OperationFailed(
-                    "Failed to post send response work".into(),
+                    "post_rcv_req_work: Failed to query QP state".into(),
                 ));
+            }
+
+
+            match attr.qp_state {
+                rdma_binding::ibv_qp_state_IBV_QPS_INIT |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTR |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTS => {
+                    let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
+                    if ret != 0 {
+                        return Err(WorkManagerError::OperationFailed(
+                            "Failed to post send response work".into(),
+                        ));
+                    }
+                }
+                other => {
+                    return Err(WorkManagerError::OperationFailed(
+                        format!("post_rcv_req_work: Unexpected QP state: {other}").into(),
+                    ));
+                }
             }
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
@@ -549,11 +597,35 @@ impl RdmaWorkManager {
                     "post_send_response_work_with_data: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
-            let ret = rdma_binding::ibv_post_send_ex((*qp).as_ptr(), &mut wr, &mut bad_client_send_wr);
-            if ret != 0 {
+            let mut attr = std::mem::zeroed::<rdma_binding::ibv_qp_attr>();
+            let mut init_attr = std::mem::zeroed::<rdma_binding::ibv_qp_init_attr>();
+            let rc = unsafe {
+                rdma_binding::ibv_query_qp(qp.as_ptr(), &mut attr, IBV_QP_STATE, &mut init_attr)
+            };
+
+            if rc != 0 {
                 return Err(WorkManagerError::OperationFailed(
-                    "Failed to post send response work".into(),
+                    "post_rcv_req_work: Failed to query QP state".into(),
                 ));
+            }
+
+
+            match attr.qp_state {
+                rdma_binding::ibv_qp_state_IBV_QPS_INIT |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTR |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTS => {
+                    let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
+                    if ret != 0 {
+                        return Err(WorkManagerError::OperationFailed(
+                            "Failed to post send response work".into(),
+                        ));
+                    }
+                }
+                other => {
+                    return Err(WorkManagerError::OperationFailed(
+                        format!("post_rcv_req_work: Unexpected QP state: {other}").into(),
+                    ));
+                }
             }
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
@@ -602,7 +674,7 @@ impl RdmaWorkManager {
         let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
         unsafe {
             let ret =
-                rdma_binding::ibv_post_send_ex((*qp).as_ptr(), &mut remote_wr, &mut bad_client_send_wr);
+                rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut remote_wr, &mut bad_client_send_wr);
             if ret != 0 {
                 return Err(WorkManagerError::OperationFailed(format!(
                     "ibv_post_send_ex failed with error code: {}",
@@ -639,11 +711,35 @@ impl RdmaWorkManager {
         unsafe {
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("post_rcv_resp_work: call ibv_post_recv_ex");
-            let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
-            if ret != 0 {
+            let mut attr = std::mem::zeroed::<rdma_binding::ibv_qp_attr>();
+            let mut init_attr = std::mem::zeroed::<rdma_binding::ibv_qp_init_attr>();
+            let rc = unsafe {
+                rdma_binding::ibv_query_qp(qp.as_ptr(), &mut attr, IBV_QP_STATE, &mut init_attr)
+            };
+
+            if rc != 0 {
                 return Err(WorkManagerError::OperationFailed(
-                    "Failed to post rcv work".into(),
+                    "post_rcv_req_work: Failed to query QP state".into(),
                 ));
+            }
+
+
+            match attr.qp_state {
+                rdma_binding::ibv_qp_state_IBV_QPS_INIT |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTR |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTS => {
+                    let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
+                    if ret != 0 {
+                        return Err(WorkManagerError::OperationFailed(
+                            "Failed to post rcv work".into(),
+                        ));
+                    }
+                }
+                other => {
+                    return Err(WorkManagerError::OperationFailed(
+                        format!("post_rcv_req_work: Unexpected QP state: {other}").into(),
+                    ));
+                }
             }
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[SUCCESS] post_rcv_resp_work: call ibv_post_recv_ex");
@@ -677,11 +773,35 @@ impl RdmaWorkManager {
         unsafe {
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("post_rcv_resp_work_in_capsule_data: call ibv_post_recv_ex");
-            let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
-            if ret != 0 {
+            let mut attr = std::mem::zeroed::<rdma_binding::ibv_qp_attr>();
+            let mut init_attr = std::mem::zeroed::<rdma_binding::ibv_qp_init_attr>();
+            let rc = unsafe {
+                rdma_binding::ibv_query_qp(qp.as_ptr(), &mut attr, IBV_QP_STATE, &mut init_attr)
+            };
+
+            if rc != 0 {
                 return Err(WorkManagerError::OperationFailed(
-                    "Failed to post rcv work".into(),
+                    "post_rcv_req_work: Failed to query QP state".into(),
                 ));
+            }
+
+
+            match attr.qp_state {
+                rdma_binding::ibv_qp_state_IBV_QPS_INIT |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTR |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTS => {
+                    let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
+                    if ret != 0 {
+                        return Err(WorkManagerError::OperationFailed(
+                            "Failed to post rcv work".into(),
+                        ));
+                    }
+                }
+                other => {
+                    return Err(WorkManagerError::OperationFailed(
+                        format!("post_rcv_req_work: Unexpected QP state: {other}").into(),
+                    ));
+                }
             }
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!("[SUCCESS] post_rcv_resp_work_in_capsule_data: call ibv_post_recv_ex");
@@ -722,12 +842,35 @@ impl RdmaWorkManager {
                     "post_send_request_work: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
-            let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
-            if ret != 0 {
-                return Err(WorkManagerError::OperationFailed(format!(
-                    "ibv_post_recv_ex failed with error code: {}",
-                    ret
-                )));
+            let mut attr = std::mem::zeroed::<rdma_binding::ibv_qp_attr>();
+            let mut init_attr = std::mem::zeroed::<rdma_binding::ibv_qp_init_attr>();
+            let rc = unsafe {
+                rdma_binding::ibv_query_qp(qp.as_ptr(), &mut attr, IBV_QP_STATE, &mut init_attr)
+            };
+
+            if rc != 0 {
+                return Err(WorkManagerError::OperationFailed(
+                    "post_rcv_req_work: Failed to query QP state".into(),
+                ));
+            }
+
+            match attr.qp_state {
+                rdma_binding::ibv_qp_state_IBV_QPS_INIT |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTR |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTS => {
+                    let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
+                    if ret != 0 {
+                        return Err(WorkManagerError::OperationFailed(format!(
+                            "ibv_post_recv_ex failed with error code: {}",
+                            ret
+                        )));
+                    }
+                }
+                other => {
+                    return Err(WorkManagerError::OperationFailed(
+                        format!("post_rcv_req_work: Unexpected QP state: {other}").into(),
+                    ));
+                }
             }
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
@@ -774,12 +917,35 @@ impl RdmaWorkManager {
                     "post_send_request_work_in_capsule_data: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
-            let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
-            if ret != 0 {
-                return Err(WorkManagerError::OperationFailed(format!(
-                    "ibv_post_recv_ex failed with error code: {}",
-                    ret
-                )));
+            let mut attr = std::mem::zeroed::<rdma_binding::ibv_qp_attr>();
+            let mut init_attr = std::mem::zeroed::<rdma_binding::ibv_qp_init_attr>();
+            let rc = unsafe {
+                rdma_binding::ibv_query_qp(qp.as_ptr(), &mut attr, IBV_QP_STATE, &mut init_attr)
+            };
+
+            if rc != 0 {
+                return Err(WorkManagerError::OperationFailed(
+                    "post_rcv_req_work: Failed to query QP state".into(),
+                ));
+            }
+
+            match attr.qp_state {
+                rdma_binding::ibv_qp_state_IBV_QPS_INIT |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTR |
+                rdma_binding::ibv_qp_state_IBV_QPS_RTS => {
+                    let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
+                    if ret != 0 {
+                        return Err(WorkManagerError::OperationFailed(format!(
+                            "ibv_post_recv_ex failed with error code: {}",
+                            ret
+                        )));
+                    }
+                }
+                other => {
+                    return Err(WorkManagerError::OperationFailed(
+                        format!("post_rcv_req_work: Unexpected QP state: {other}").into(),
+                    ));
+                }
             }
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
