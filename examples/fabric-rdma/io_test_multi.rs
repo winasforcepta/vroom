@@ -343,9 +343,11 @@ fn main() {
 
                 // let mut retry: i64 = 1 << 20;
                 println!("Time out with {} inflight I/O after completing {} I/O. Draining...", max_quota - quota, total_io.clone());
-                while quota < max_quota {
+                let mut retry = 1 << 13;
+                while quota < max_quota && retry > 0 {
                     let (ns, nf) = transport.poll_completions_reset().unwrap();
                     quota = quota + (ns + nf) as usize;
+                    retry -= 1;
                 }
 
                 // while quota < max_quota {
