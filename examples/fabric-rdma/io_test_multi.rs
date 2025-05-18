@@ -117,10 +117,28 @@ fn generate_mode_is_write(ns_size_bytes: u64, block_size: u64, io_mode: IOMode) 
     ret
 }
 
-fn print_result(mode: IOMode, workload: Workload, block_size: u32, queue_depth: u32,
-                bandwidth: f64, io_per_sec: f64, latency_min: u64, latency_percentile_25: u64,
-                latency_percentile_50: u64, latency_percentile_75: u64, latency_percentile_90: u64,
-                latency_percentile_99: u64, latency_max: u64) -> () {
+fn print_result(
+    mode: IOMode,
+    workload: Workload,
+    block_size: u32,
+    queue_depth: u32,
+    bandwidth: f64,
+    io_per_sec: f64,
+    latency_percentile_010: u64,
+    latency_percentile_050: u64,
+    latency_percentile_100: u64,
+    latency_percentile_200: u64,
+    latency_percentile_300: u64,
+    latency_percentile_500: u64,
+    latency_percentile_600: u64,
+    latency_percentile_700: u64,
+    latency_percentile_800: u64,
+    latency_percentile_900: u64,
+    latency_percentile_950: u64,
+    latency_percentile_990: u64,
+    latency_percentile_995: u64,
+    latency_percentile_999: u64,
+) -> () {
     let mode_str: String = match mode {
         IOMode::Read => { "Read".to_string() },
         IOMode::Write => { "Write".to_string() }
@@ -130,11 +148,29 @@ fn print_result(mode: IOMode, workload: Workload, block_size: u32, queue_depth: 
         Workload::Sequential => { "Sequential".to_string() }
         Workload::Random => { "Random".to_string() }
     };
-    println!("\"mode\", \"workload\", \"block_size\", \"queue_depth\", \"bandwidth\", \"io_per_sec\", \"latency_min_us\", \"latency_percentile_25_us\", \"latency_percentile_50_us\", \"latency_percentile_75_us\", \"latency_percentile_90_us\", \"latency_percentile_99_us\", \"latency_max_us\"");
-    println!("\"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\"",
-             mode_str, workload_str, block_size, queue_depth,
-             bandwidth, io_per_sec, latency_min as f64 / 1000f64, latency_percentile_25 as f64 / 1000f64, latency_percentile_50 as f64 / 1000f64,
-             latency_percentile_75 as f64 / 1000f64, latency_percentile_90 as f64 / 1000f64, latency_percentile_99 as f64 / 1000f64, latency_max as f64 / 1000f64);
+    println!("\"mode\", \"workload\", \"block_size\", \"queue_depth\", \"bandwidth\", \"io_per_sec\", \"latency_percentile_010_us\", \"latency_percentile_050_us\", \"latency_percentile_100_us\", \"latency_percentile_200_us\", \"latency_percentile_300_us\", \"latency_percentile_500_us\", \"latency_percentile_600_us\", \"latency_percentile_700_us\", \"latency_percentile_800_us\", \"latency_percentile_900_us\", \"latency_percentile_950_us\", \"latency_percentile_990_us\", \"latency_percentile_995_us\", \"latency_percentile_999_us\"");
+    println!("\"{}\", \"{}\", \"{}\", \"{}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\", \"{:.2}\"",
+             mode_str,
+             workload_str,
+             block_size,
+             queue_depth,
+             bandwidth,
+             io_per_sec,
+             latency_percentile_010 as f64 / 1000f64,
+             latency_percentile_050 as f64 / 1000f64,
+             latency_percentile_100 as f64 / 1000f64,
+             latency_percentile_200 as f64 / 1000f64,
+             latency_percentile_300 as f64 / 1000f64,
+             latency_percentile_500 as f64 / 1000f64,
+             latency_percentile_600 as f64 / 1000f64,
+             latency_percentile_700 as f64 / 1000f64,
+             latency_percentile_800 as f64 / 1000f64,
+             latency_percentile_900 as f64 / 1000f64,
+             latency_percentile_950 as f64 / 1000f64,
+             latency_percentile_990 as f64 / 1000f64,
+             latency_percentile_995 as f64 / 1000f64,
+             latency_percentile_999 as f64 / 1000f64
+    );
 }
 
 
@@ -371,16 +407,43 @@ fn main() {
 
     let bandwidth = sum_bw / args.client.clone() as f64;
     let io_per_sec = global_histogram.len() as f64 / max_runtime;
-    let latency_min = global_histogram.min(); // nanoseconds
-    let latency_percentile_25 = global_histogram.value_at_quantile(0.25); // nanoseconds
-    let latency_percentile_50 = global_histogram.value_at_quantile(0.5); // nanoseconds
-    let latency_percentile_75 = global_histogram.value_at_quantile(0.75); // nanoseconds
-    let latency_percentile_90 = global_histogram.value_at_quantile(0.9); // nanoseconds
-    let latency_percentile_99 = global_histogram.value_at_quantile(0.99); // nanoseconds
-    let latency_max = global_histogram.max(); // nanoseconds
-    print_result(args.mode.clone(), args.workload.clone(), args.block_size, args.queue_depth.clone(),
-                 bandwidth, io_per_sec, latency_min, latency_percentile_25,
-                 latency_percentile_50, latency_percentile_75, latency_percentile_90,
-                 latency_percentile_99, latency_max);
+    // latencies in nanoseconds
+    let latency_min = global_histogram.min();
+    let latency_percentile_010 = global_histogram.value_at_quantile(0.010);
+    let latency_percentile_050 = global_histogram.value_at_quantile(0.050);
+    let latency_percentile_100 = global_histogram.value_at_quantile(0.100);
+    let latency_percentile_200 = global_histogram.value_at_quantile(0.200);
+    let latency_percentile_300 = global_histogram.value_at_quantile(0.300);
+    let latency_percentile_500 = global_histogram.value_at_quantile(0.500);
+    let latency_percentile_600 = global_histogram.value_at_quantile(0.600);
+    let latency_percentile_700 = global_histogram.value_at_quantile(0.700);
+    let latency_percentile_800 = global_histogram.value_at_quantile(0.800);
+    let latency_percentile_900 = global_histogram.value_at_quantile(0.900);
+    let latency_percentile_950 = global_histogram.value_at_quantile(0.950);
+    let latency_percentile_990 = global_histogram.value_at_quantile(0.990);
+    let latency_percentile_995 = global_histogram.value_at_quantile(0.995);
+    let latency_percentile_999 = global_histogram.value_at_quantile(0.999);
+    print_result(
+        args.mode.clone(),
+        args.workload.clone(),
+        args.block_size,
+        args.queue_depth.clone(),
+        bandwidth,
+        io_per_sec,
+        latency_percentile_010,
+        latency_percentile_050,
+        latency_percentile_100,
+        latency_percentile_200,
+        latency_percentile_300,
+        latency_percentile_500,
+        latency_percentile_600,
+        latency_percentile_700,
+        latency_percentile_800,
+        latency_percentile_900,
+        latency_percentile_950,
+        latency_percentile_990,
+        latency_percentile_995,
+        latency_percentile_999
+    );
     println!("total I/O: {}. Total time: {}", global_histogram.len(), max_runtime);
 }

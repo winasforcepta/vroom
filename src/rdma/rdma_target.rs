@@ -917,7 +917,7 @@ use crate::memory::DmaSlice;
                     unsafe {
                         #[cfg(any(debug_mode, debug_mode_verbose))]
                         debug_println_verbose!("[NVMe Device Thread] Submit I/O {} command: bytes_offset: {}, lba: {}, size: {}", if write { "WRITE" } else { "READ" }, start_offset, lba, size);
-                        inflight_cmd_cnt[c_id as usize].0 += nvme_queue_pair.submit_io_with_cid(
+                        inflight_cmd_cnt[c_id as usize].0 = nvme_queue_pair.submit_io_with_cid(
                             &base_dma.to_dma().slice(start_offset..start_offset + size),
                             lba,
                             write,
@@ -946,7 +946,7 @@ use crate::memory::DmaSlice;
                     inflight_cmd_cnt[c_id as usize].0 = inflight_cmd_cnt[c_id as usize].0 - 1;
                     inflight_cmd_cnt[c_id as usize].1 |= status != 0;
 
-                    if inflight_cmd_cnt[c_id as usize].0 > 0 {
+                    if inflight_cmd_cnt[c_id as usize].0 != 0 {
                         continue;
                     }
 
