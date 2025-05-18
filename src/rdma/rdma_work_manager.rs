@@ -444,7 +444,7 @@ impl RdmaWorkManager {
         let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
         let mut sge_list = [capsule_sge, buffer_sge];
 
-        let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
+        let mut wr = rdma_binding::ibv_recv_wr {
             wr_id: wr_id as u64,
             next: ptr::null_mut(),
             sg_list: sge_list.as_mut_ptr(),

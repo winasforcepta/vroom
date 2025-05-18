@@ -167,20 +167,9 @@ fn main() {
         let in_capsule_data = args.in_capsule_data.clone();
 
         let handle = thread::spawn(move || {
-            let max_quota = quota;
             let mut hist: Histogram<u64> = Histogram::new_with_bounds(1u64, 300_000_000_000u64, 3).unwrap();
-            let mut transport = {
-                let _guard = connection_mtx.lock().unwrap();
-                println!("Client {} is connecting.", i);
-                RdmaInitiator::connect(ipv4, 4421, quota)
-                    .expect("failed to connect to server and create transport.")
-            };
-            println!("Client {} is connected.", i);
-            let pd = transport.get_pd().expect("failed to get pd");
-            thread::sleep(Duration::from_millis(500));
-            let lbas = generate_lba_offsets(ns_size_bytes, block_size as u64, workload == Workload::Random);
-            let io_write_mode = generate_mode_is_write(ns_size_bytes, block_size as u64, mode);
-
+            let bw;
+            let mut total = Duration::ZERO;
             let total_size = args.queue_depth * args.block_size;
             let buffer_layout = Layout::from_size_align(total_size as usize, 4).unwrap();
             let io_buffer = unsafe { alloc(buffer_layout) };
@@ -215,122 +204,145 @@ fn main() {
                 }
             }
 
-            let buffer_mr = unsafe {
-                rdma_binding::ibv_reg_mr(
-                    pd,
-                    io_buffer as *mut c_void,
-                    total_size as size_t,
-                    (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
-                        | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
-                        | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
-                        as c_int,
-                )
-            };
-            let (buffer_rkey, buffer_lkey) = unsafe {
-                ((*buffer_mr).rkey, (*buffer_mr).lkey )
-            };
-            not_ready_clients.fetch_sub(1, Ordering::SeqCst);
-            println!("Client {} is ready.", i);
-            while not_ready_clients.load(Ordering::SeqCst) > 0 {}
-            println!("benchmark is starting...");
-            let duration = Duration::from_secs(duration_seconds);
-            let mut total = Duration::ZERO;
-            let mut total_io = 0;
-            let mut step = 0usize;
-            let mut cur_idx = 0usize;
-            let before = Instant::now();
+            {
+                let max_quota = quota;
+                let mut transport = {
+                    let _guard = connection_mtx.lock().unwrap();
+                    println!("Client {} is connecting.", i);
+                    RdmaInitiator::connect(ipv4, 4421, quota)
+                        .expect("failed to connect to server and create transport.")
+                };
+                println!("Client {} is connected.", i);
+                let pd = transport.get_pd().expect("failed to get pd");
+                thread::sleep(Duration::from_millis(500));
+                let lbas = generate_lba_offsets(ns_size_bytes, block_size as u64, workload == Workload::Random);
+                let io_write_mode = generate_mode_is_write(ns_size_bytes, block_size as u64, mode);
 
-            while total < duration {
-                while quota > 0 {
-                    quota -= 1;
-                    let lba = lbas[step];
-                    let is_write_mode = io_write_mode[step];
-                    match is_write_mode {
-                        true => unsafe {
-                            #[cfg(any(debug_mode, debug_mode_verbose))]
-                            debug_println_verbose!("post_remote_io_write");
-                            if in_capsule_data {
-                                per_io_time_tracker.push_back(Instant::now());
-                                transport
-                                    .post_remote_io_write_in_capsule_data(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey, buffer_lkey)
-                                    .expect("failed to post remote_io_write");
-                            } else {
-                                per_io_time_tracker.push_back(Instant::now());
-                                transport
-                                    .post_remote_io_write(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
-                                    .expect("failed to post remote_io_write");
+
+
+                let buffer_mr = unsafe {
+                    rdma_binding::ibv_reg_mr(
+                        pd,
+                        io_buffer as *mut c_void,
+                        total_size as size_t,
+                        (rdma_binding::ibv_access_flags_IBV_ACCESS_LOCAL_WRITE
+                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_READ
+                            | rdma_binding::ibv_access_flags_IBV_ACCESS_REMOTE_WRITE)
+                            as c_int,
+                    )
+                };
+                let (buffer_rkey, buffer_lkey) = unsafe {
+                    ((*buffer_mr).rkey, (*buffer_mr).lkey )
+                };
+                not_ready_clients.fetch_sub(1, Ordering::SeqCst);
+                println!("Client {} is ready.", i);
+                while not_ready_clients.load(Ordering::SeqCst) > 0 {}
+                println!("benchmark is starting...");
+                let duration = Duration::from_secs(duration_seconds);
+                let mut total_io = 0;
+                let mut step = 0usize;
+                let mut cur_idx = 0usize;
+                let before = Instant::now();
+
+                while total < duration {
+                    while quota > 0 {
+                        quota -= 1;
+                        let lba = lbas[step];
+                        let is_write_mode = io_write_mode[step];
+                        match is_write_mode {
+                            true => unsafe {
+                                #[cfg(any(debug_mode, debug_mode_verbose))]
+                                debug_println_verbose!("post_remote_io_write");
+                                if in_capsule_data {
+                                    per_io_time_tracker.push_back(Instant::now());
+                                    transport
+                                        .post_remote_io_write_in_capsule_data(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey, buffer_lkey)
+                                        .expect("failed to post remote_io_write");
+                                } else {
+                                    per_io_time_tracker.push_back(Instant::now());
+                                    transport
+                                        .post_remote_io_write(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
+                                        .expect("failed to post remote_io_write");
+                                }
+
                             }
+                            false => unsafe {
+                                #[cfg(any(debug_mode, debug_mode_verbose))]
+                                debug_println_verbose!("post_remote_io_read");
+                                if in_capsule_data {
+                                    per_io_time_tracker.push_back(Instant::now());
+                                    transport
+                                        .post_remote_io_read_in_capsule_data(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey, buffer_lkey)
+                                        .expect("failed to post remote_io_read");
+                                } else {
+                                    per_io_time_tracker.push_back(Instant::now());
+                                    transport
+                                        .post_remote_io_read(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
+                                        .expect("failed to post remote_io_read");
+                                }
 
-                        }
-                        false => unsafe {
-                            #[cfg(any(debug_mode, debug_mode_verbose))]
-                            debug_println_verbose!("post_remote_io_read");
-                            if in_capsule_data {
-                                per_io_time_tracker.push_back(Instant::now());
-                                transport
-                                    .post_remote_io_read_in_capsule_data(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey, buffer_lkey)
-                                    .expect("failed to post remote_io_read");
-                            } else {
-                                per_io_time_tracker.push_back(Instant::now());
-                                transport
-                                    .post_remote_io_read(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
-                                    .expect("failed to post remote_io_read");
                             }
-
                         }
+
+                        step = (step + 1) % lbas.len();
+                        cur_idx = (cur_idx + 1) % args.queue_depth as usize;
                     }
 
-                    step = (step + 1) % lbas.len();
-                    cur_idx = (cur_idx + 1) % args.queue_depth as usize;
+                    let (ns, nf) = transport.poll_completions_reset().unwrap();
+                    #[cfg(any(debug_mode, debug_mode_verbose))]
+                    debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
+                    total_io += (ns + nf) as usize;
+
+                    for _i in 0..(ns + nf) {
+                        let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
+                        hist.record(latency.max(1)).unwrap() // avoid 0
+                    }
+                    quota = quota + (ns + nf) as usize;
+                    total = before.elapsed();
+                    if nf > 0 {
+                        eprintln!("Error I/O occurred!");
+                        break;
+                    }
                 }
 
-                let (ns, nf) = transport.poll_completions_reset().unwrap();
-                #[cfg(any(debug_mode, debug_mode_verbose))]
-                debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
-                total_io += (ns + nf) as usize;
+                // let mut retry: i64 = 1 << 20;
+                println!("Time out with {} inflight I/O after completing {} I/O. Draining...", max_quota - quota, total_io.clone());
+                while quota < max_quota {
+                    let (ns, nf) = transport.poll_completions_reset().unwrap();
+                    quota = quota + (ns + nf) as usize;
+                }
 
-                for _i in 0..(ns + nf) {
-                    let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
-                    hist.record(latency.max(1)).unwrap() // avoid 0
-                }
-                quota = quota + (ns + nf) as usize;
-                total = before.elapsed();
-                if nf > 0 {
-                    eprintln!("Error I/O occurred!");
-                    break;
-                }
+                // while quota < max_quota {
+                //     if retry == 0 {
+                //         println!("{} remaining. Draining...", max_quota - quota);
+                //         retry = 1 << 15;
+                //     }
+                //     let (ns, nf) = transport.poll_completions_reset().unwrap();
+                //     #[cfg(any(debug_mode, debug_mode_verbose))]
+                //     debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
+                //     total_io += (ns + nf) as usize;
+                //
+                //     for _i in 0..(ns + nf) {
+                //         let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
+                //         hist.record(latency.max(1)).unwrap() // avoid 0
+                //     }
+                //     quota = quota + (ns + nf) as usize;
+                //     total = before.elapsed();
+                //     if ns + nf == 0 {
+                //         retry = retry - 1;
+                //     }
+                // }
+                bw = (total_io * block_size as usize) as f64 / total.as_secs_f64();
+                println!("Client {} is done.", i);
             }
 
-            // let mut retry: i64 = 1 << 20;
-            println!("Time out with {} inflight I/O after completing {} I/O. Draining...", max_quota - quota, total_io.clone());
-            // while quota < max_quota {
-            //     if retry == 0 {
-            //         println!("{} remaining. Draining...", max_quota - quota);
-            //         retry = 1 << 15;
-            //     }
-            //     let (ns, nf) = transport.poll_completions_reset().unwrap();
-            //     #[cfg(any(debug_mode, debug_mode_verbose))]
-            //     debug_println_verbose!("completed I/O: {} success {} fail", ns, nf);
-            //     total_io += (ns + nf) as usize;
-            //
-            //     for _i in 0..(ns + nf) {
-            //         let latency = per_io_time_tracker.pop_front().unwrap().elapsed().as_nanos() as u64;
-            //         hist.record(latency.max(1)).unwrap() // avoid 0
-            //     }
-            //     quota = quota + (ns + nf) as usize;
-            //     total = before.elapsed();
-            //     if ns + nf == 0 {
-            //         retry = retry - 1;
-            //     }
-            // }
+            thread::sleep(Duration::from_millis(5000));
 
-            let bw = (total_io * block_size as usize) as f64 / total.as_secs_f64();
             unsafe {
                 let _ = libc::munlock(io_buffer as *const _, total_size as size_t);
                 dealloc(io_buffer, buffer_layout);
             }
 
-            println!("Client {} is done.", i);
 
             (hist, bw, total.as_secs_f64())
         });

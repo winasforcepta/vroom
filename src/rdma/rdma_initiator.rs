@@ -16,8 +16,7 @@ pub mod rdma_initiator {
         server_sockaddr: rdma_binding::sockaddr_in,
         capsule_context: CapsuleContext,
         ctx: ClientRdmaContext,
-        pub(crate) rwm: RdmaWorkManager,
-        wr_id_to_buffer: Vec<Option<*mut u8>>
+        pub(crate) rwm: RdmaWorkManager
     }
 
     fn alloc_pd() -> Result<Box<rdma_binding::ibv_pd>, RdmaTransportError> {
@@ -260,10 +259,7 @@ pub mod rdma_initiator {
                 server_sockaddr,
                 capsule_context,
                 ctx,
-                rwm,
-                wr_id_to_buffer: std::iter::repeat_with(|| None)
-                    .take(queue_depth)
-                    .collect(),
+                rwm
             })
         }
 
@@ -302,8 +298,6 @@ pub mod rdma_initiator {
                 data_len
             );
 
-            // assign the buffer containing the data
-            self.wr_id_to_buffer[wr_id as usize] = Some(local_buffer);
 
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
@@ -358,9 +352,6 @@ pub mod rdma_initiator {
                 data_len
             );
 
-            // assign the buffer containing the data
-            self.wr_id_to_buffer[wr_id as usize] = Some(local_buffer);
-
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
             let buffer_sge = rdma_binding::ibv_sge {
@@ -412,8 +403,6 @@ pub mod rdma_initiator {
                 data_len
             );
 
-            // assign the buffer containing the data
-            self.wr_id_to_buffer[wr_id as usize] = Some(local_buffer);
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
             self.rwm
@@ -458,8 +447,6 @@ pub mod rdma_initiator {
                 data_len
             );
 
-            // assign the buffer containing the data
-            self.wr_id_to_buffer[wr_id as usize] = Some(local_buffer);
             // First post the rcv work to prepare for response
             let resp_sge = self.capsule_context.get_resp_sge(wr_id as usize).unwrap();
             let buffer_sge = rdma_binding::ibv_sge {

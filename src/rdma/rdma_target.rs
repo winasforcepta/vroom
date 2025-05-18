@@ -508,18 +508,13 @@ use crate::memory::DmaSlice;
             while let Some(wr_id) = rdma_work_manager.allocate_wr_id() {
                 // Allocate buffer for in-capsule data.
                 let buffer_sge = {
-                    let (buffer_idx, mr) = buffer_manager.allocate(client_id).expect("Failed to allocate buffer from buffer manager"); // TODO(what should we do when there is no available buffer?)
-                    let lkey = unsafe {
-                        #[cfg(not(disable_assert))]
-                        assert!(!mr.is_null(), "Buffer manager MR is null");
-                        (*mr).lkey.clone()
-                    };
+                    let (buffer_idx, _) = buffer_manager.allocate(client_id).expect("Failed to allocate buffer from buffer manager"); // TODO(what should we do when there is no available buffer?)
                     client_context.set_wr_id_buffer_idx(wr_id as usize, buffer_idx);
-                    let (buffer_virtual_add, _, _, _) = buffer_manager.get_memory_info(client_id, buffer_idx);
+                    let (buffer_virtual_add, _, size, lkey) = buffer_manager.get_memory_info(client_id, buffer_idx);
 
                     rdma_binding::ibv_sge {
                         addr: buffer_virtual_add as u64,
-                        length: block_size as u32,
+                        length: size as u32,
                         lkey,
                     }
                 };
@@ -800,18 +795,13 @@ use crate::memory::DmaSlice;
 
                             let buffer_sge = {
                                 let (buffer_idx, mr) = buffer_manager.allocate(client_id).expect("Failed to allocate buffer from buffer manager"); // TODO(what should we do when there is no available buffer?)
-                                let lkey = unsafe {
-                                    #[cfg(not(disable_assert))]
-                                    assert!(!mr.is_null(), "Buffer manager MR is null");
-                                    (*mr).lkey.clone()
-                                };
                                 client_context.set_wr_id_buffer_idx(new_wr_id as usize, buffer_idx);
-                                let (buffer_virtual_add, _, _, _) = buffer_manager.get_memory_info(client_id, buffer_idx);
+                                let (buffer_virtual_add, _, buffer_size, buffer_lkey) = buffer_manager.get_memory_info(client_id, buffer_idx);
 
                                 rdma_binding::ibv_sge {
                                     addr: buffer_virtual_add as u64,
-                                    length: block_size as u32,
-                                    lkey,
+                                    length: buffer_size as u32,
+                                    lkey: buffer_lkey,
                                 }
                             };
                             #[cfg(any(debug_mode, debug_mode_verbose))]
