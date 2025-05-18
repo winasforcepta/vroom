@@ -76,6 +76,9 @@ struct Args {
 
     #[arg(long, default_value_t = 1)] // 16GB default
     client: u64,
+
+    #[arg(long, default_value_t = false)] // 16GB default
+    in_capsule_data: bool,
 }
 
 fn generate_lba_offsets(ns_size_bytes: u64, block_size: u64, random: bool) -> Vec<u64> {
@@ -161,6 +164,7 @@ fn main() {
         let mut quota = args.queue_depth as usize;
         let duration_seconds = args.duration_seconds.clone();
         let not_ready_clients = not_ready_clients.clone();
+        let in_capsule_data = args.in_capsule_data.clone();
 
         let handle = thread::spawn(move || {
             let max_quota = quota;
@@ -183,12 +187,34 @@ fn main() {
             if io_buffer.is_null() {
                 panic!("failed to allocate buffer");
             }
+            let pattern = b"0123456789";
+            let pattern_len = pattern.len();
+
             unsafe {
-                ptr::write_bytes(io_buffer, 0, total_size as usize);
+                let mut offset = 0;
+                while offset + pattern_len <= total_size as usize {
+                    ptr::copy_nonoverlapping(
+                        pattern.as_ptr(),
+                        io_buffer.add(offset),
+                        pattern_len,
+                    );
+                    offset += pattern_len;
+                }
+
+                // Handle any remaining bytes if total_size is not a multiple of 10
+                if offset < total_size as usize {
+                    ptr::copy_nonoverlapping(
+                        pattern.as_ptr(),
+                        io_buffer.add(offset),
+                        total_size as usize - offset,
+                    );
+                }
+
                 if libc::mlock(io_buffer as *const _, total_size as size_t) != 0 {
                     panic!("failed to mlock");
                 }
             }
+
             let buffer_mr = unsafe {
                 rdma_binding::ibv_reg_mr(
                     pd,
@@ -200,7 +226,9 @@ fn main() {
                         as c_int,
                 )
             };
-            let buffer_rkey = unsafe { (*buffer_mr).rkey };
+            let (buffer_rkey, buffer_lkey) = unsafe {
+                ((*buffer_mr).rkey, (*buffer_mr).lkey )
+            };
             not_ready_clients.fetch_sub(1, Ordering::SeqCst);
             println!("Client {} is ready.", i);
             while not_ready_clients.load(Ordering::SeqCst) > 0 {}
@@ -221,18 +249,34 @@ fn main() {
                         true => unsafe {
                             #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("post_remote_io_write");
-                            per_io_time_tracker.push_back(Instant::now());
-                            transport
-                                .post_remote_io_write(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
-                                .expect("failed to post remote_io_write");
+                            if in_capsule_data {
+                                per_io_time_tracker.push_back(Instant::now());
+                                transport
+                                    .post_remote_io_write_in_capsule_data(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey, buffer_lkey)
+                                    .expect("failed to post remote_io_write");
+                            } else {
+                                per_io_time_tracker.push_back(Instant::now());
+                                transport
+                                    .post_remote_io_write(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
+                                    .expect("failed to post remote_io_write");
+                            }
+
                         }
                         false => unsafe {
                             #[cfg(any(debug_mode, debug_mode_verbose))]
                             debug_println_verbose!("post_remote_io_read");
-                            per_io_time_tracker.push_back(Instant::now());
-                            transport
-                                .post_remote_io_read(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
-                                .expect("failed to post remote_io_read");
+                            if in_capsule_data {
+                                per_io_time_tracker.push_back(Instant::now());
+                                transport
+                                    .post_remote_io_read_in_capsule_data(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey, buffer_lkey)
+                                    .expect("failed to post remote_io_read");
+                            } else {
+                                per_io_time_tracker.push_back(Instant::now());
+                                transport
+                                    .post_remote_io_read(step as u16, lba, io_buffer.add(cur_idx * block_size as usize), block_size, buffer_rkey)
+                                    .expect("failed to post remote_io_read");
+                            }
+
                         }
                     }
 

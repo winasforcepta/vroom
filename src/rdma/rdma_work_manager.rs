@@ -165,6 +165,9 @@ impl RdmaWorkManager {
                 n_suc = n_suc + (wc.status == rdma_binding::ibv_wc_status_IBV_WC_SUCCESS) as u16;
                 n_fail = n_fail + (wc.status != rdma_binding::ibv_wc_status_IBV_WC_SUCCESS) as u16;
             }
+            if (wc.status != rdma_binding::ibv_wc_status_IBV_WC_SUCCESS) {
+                println!("wr_id={} opcode = {} status={}", wc.wr_id, wc.opcode, wc.status)
+            }
 
             i = i + 1;
         }
@@ -401,7 +404,7 @@ impl RdmaWorkManager {
             *self.n_completed_work.get() = num_polled as u16;
             *self.first_unprocessed_wc_index.get() = 0;
             #[cfg(any(debug_mode, debug_mode_verbose))]
-            debug_println_verbose!("poll_completed_works: ACK {} WC", n);
+            debug_println_verbose!("poll_completed_works: ACK {} WC", num_polled);
             rdma_binding::ibv_ack_cq_events((*cq).as_ptr(), num_polled as c_uint);
         }
 
@@ -431,19 +434,21 @@ impl RdmaWorkManager {
         &self,
         wr_id: u16,
         qp: &Sendable<rdma_binding::ibv_qp>,
-        mut sge: rdma_binding::ibv_sge,
+        mut capsule_sge: rdma_binding::ibv_sge,
+        mut buffer_sge: rdma_binding::ibv_sge,
     ) -> Result<u16, WorkManagerError> {
         #[cfg(enable_trace)]
         let span = span!(Level::INFO, "RdmaWorkManager.post_rcv_req_work");
         #[cfg(enable_trace)]
         let _ = span.enter();
         let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
+        let mut sge_list = [capsule_sge, buffer_sge];
 
         let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
             wr_id: wr_id as u64,
             next: ptr::null_mut(),
-            sg_list: &mut sge,
-            num_sge: 1,
+            sg_list: sge_list.as_mut_ptr(),
+            num_sge: 2,
         };
 
         unsafe {
@@ -501,6 +506,58 @@ impl RdmaWorkManager {
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
                     "[SUCCESS] post_send_response_work: call ibv_post_send_ex. wr_id: {}",
+                    wr_id
+                );
+        }
+
+        // self.request_for_notification(cq)?;
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn post_send_response_work_with_data(
+        &self,
+        wr_id: u16,
+        qp: &Sendable<rdma_binding::ibv_qp>,
+        mut capsule_sge: rdma_binding::ibv_sge,
+        mut buffer_sge: rdma_binding::ibv_sge,
+    ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_send_response_work_with_data");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
+        let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
+        let mut sge_list = [capsule_sge, buffer_sge];
+
+        let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
+            wr_id: wr_id as u64,
+            next: ptr::null_mut(),
+            sg_list: sge_list.as_mut_ptr(),
+            num_sge: 2,
+            opcode: rdma_binding::ibv_wr_opcode_IBV_WR_SEND,
+            send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
+            __bindgen_anon_1: unsafe { mem::zeroed() },
+            wr: unsafe { mem::zeroed() },
+            qp_type: unsafe { mem::zeroed() },
+            __bindgen_anon_2: unsafe { mem::zeroed() },
+        };
+
+        unsafe {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
+            debug_println_verbose!(
+                    "post_send_response_work_with_data: call ibv_post_send_ex. wr_id: {}",
+                    wr_id
+                );
+            let ret = rdma_binding::ibv_post_send_ex((*qp).as_ptr(), &mut wr, &mut bad_client_send_wr);
+            if ret != 0 {
+                return Err(WorkManagerError::OperationFailed(
+                    "Failed to post send response work".into(),
+                ));
+            }
+            #[cfg(any(debug_mode, debug_mode_verbose))]
+            debug_println_verbose!(
+                    "[SUCCESS] post_send_response_work_with_data: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
         }
@@ -596,6 +653,44 @@ impl RdmaWorkManager {
         Ok(wr_id)
     }
 
+    pub fn post_rcv_resp_work_in_capsule_data(
+        &self,
+        wr_id: u16,
+        qp: Sendable<rdma_binding::ibv_qp>,
+        mut capsule_sge: rdma_binding::ibv_sge,
+        mut buffer_sge: rdma_binding::ibv_sge
+    ) -> Result<u16, WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_rcv_resp_work_in_capsule_data");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
+        let mut bad_client_recv_wr: *mut rdma_binding::ibv_recv_wr = ptr::null_mut();
+        let mut sge_list = [capsule_sge, buffer_sge];
+
+        let mut wr: rdma_binding::ibv_recv_wr = rdma_binding::ibv_recv_wr {
+            wr_id: wr_id as u64,
+            next: ptr::null_mut(),
+            sg_list: sge_list.as_mut_ptr(),
+            num_sge: 2,
+        };
+
+        unsafe {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
+            debug_println_verbose!("post_rcv_resp_work_in_capsule_data: call ibv_post_recv_ex");
+            let ret = rdma_binding::ibv_post_recv_ex(qp.as_ptr(), &mut wr, &mut bad_client_recv_wr);
+            if ret != 0 {
+                return Err(WorkManagerError::OperationFailed(
+                    "Failed to post rcv work".into(),
+                ));
+            }
+            #[cfg(any(debug_mode, debug_mode_verbose))]
+            debug_println_verbose!("[SUCCESS] post_rcv_resp_work_in_capsule_data: call ibv_post_recv_ex");
+        }
+
+        // self.request_for_notification(cq)?;
+        Ok(wr_id)
+    }
+
     #[inline(always)]
     pub fn post_send_request_work(
         &self,
@@ -637,6 +732,58 @@ impl RdmaWorkManager {
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println_verbose!(
                     "[SUCCESS] post_send_request_work: call ibv_post_send_ex. wr_id: {}",
+                    wr_id
+                );
+        }
+
+        // self.request_for_notification(cq)?;
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn post_send_request_work_in_capsule_data(
+        &self,
+        wr_id: u16,
+        qp: Sendable<rdma_binding::ibv_qp>,
+        mut capsule_sge: rdma_binding::ibv_sge,
+        mut buffer_sge: rdma_binding::ibv_sge,
+    ) -> Result<(), WorkManagerError> {
+        #[cfg(enable_trace)]
+        let span = span!(Level::INFO, "RdmaWorkManager.post_send_request_work_in_capsule_data");
+        #[cfg(enable_trace)]
+        let _ = span.enter();
+        let mut sge_list = [capsule_sge, buffer_sge];
+        let mut bad_client_send_wr: *mut rdma_binding::ibv_send_wr = ptr::null_mut();
+        let mut wr: rdma_binding::ibv_send_wr = rdma_binding::ibv_send_wr {
+            wr_id: wr_id as u64,
+            next: ptr::null_mut(),
+            sg_list: sge_list.as_mut_ptr(),
+            num_sge: 2,
+            opcode: rdma_binding::ibv_wr_opcode_IBV_WR_SEND,
+            send_flags: rdma_binding::ibv_send_flags_IBV_SEND_SIGNALED,
+            __bindgen_anon_1: unsafe { mem::zeroed() },
+            wr: unsafe { mem::zeroed() },
+            qp_type: unsafe { mem::zeroed() },
+            __bindgen_anon_2: unsafe { mem::zeroed() },
+        };
+
+        unsafe {
+            #[cfg(any(debug_mode, debug_mode_verbose))]
+            debug_println_verbose!(
+                    "post_send_request_work_in_capsule_data: call ibv_post_send_ex. wr_id: {}",
+                    wr_id
+                );
+            let ret = rdma_binding::ibv_post_send_ex(qp.as_ptr(), &mut wr, &mut bad_client_send_wr);
+            if ret != 0 {
+                return Err(WorkManagerError::OperationFailed(format!(
+                    "ibv_post_recv_ex failed with error code: {}",
+                    ret
+                )));
+            }
+            #[cfg(any(debug_mode, debug_mode_verbose))]
+            debug_println_verbose!(
+                    "[SUCCESS] post_send_request_work_in_capsule_data: call ibv_post_send_ex. wr_id: {}",
                     wr_id
                 );
         }

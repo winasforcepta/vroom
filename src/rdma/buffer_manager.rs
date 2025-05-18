@@ -44,7 +44,7 @@ impl BufferManager {
         let free_idx_list = Arc::new(ArrayQueue::new(block_count as usize));
         let buffer: Dma<u8> = Dma::allocate(total_bytes).unwrap();
         let thread_safe_dma = ThreadSafeDmaHandle::from(&buffer);
-        for i in (0..block_count).rev() { free_idx_list.push(i).unwrap(); }
+        for i in (0..block_count) { free_idx_list.push(i).unwrap(); }
         #[cfg(any(debug_mode, debug_mode_verbose))]
         debug_println_verbose!("[buffer manager] total_bytes = {} block_size_bytes = {} block count = {}", total_bytes, block_size_bytes, block_count);
         Ok(BufferManager {

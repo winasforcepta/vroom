@@ -53,6 +53,7 @@ pub mod capsule {
         pub(crate) data_mr_length: u32,
         pub(crate) data_mr_r_key: u32,
         pub(crate) lba: u64,
+        pub(crate) in_capsule_data: bool,
     }
 
     impl NVMeCapsule {
@@ -63,21 +64,34 @@ pub mod capsule {
                 data_mr_length: 0,
                 data_mr_r_key: 0,
                 lba: 0,
+                in_capsule_data: false,
             }
         }
     }
 
     impl fmt::Debug for NVMeCapsule {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(
-                f,
-                "NVMeCapsule {{ cmd: {:?}, data_mr_address: {:#x}, data_mr_length: {}, data_mr_r_key: {}, nvme_address: {} }}",
-                self.cmd,
-                self.data_mr_address,
-                self.data_mr_length,
-                self.data_mr_r_key,
-                self.lba
-            )
+            if self.in_capsule_data {
+                write!(
+                    f,
+                    "NVMeCapsule {{ cmd: {:?}, data_mr_length: {}, data_mr_r_key: {}, nvme_address: {} }}",
+                    self.cmd,
+                    self.data_mr_length,
+                    self.data_mr_r_key,
+                    self.lba
+                )
+            } else {
+                write!(
+                    f,
+                    "NVMeCapsule {{ cmd: {:?}, data_mr_address: {:#x}, data_mr_length: {}, data_mr_r_key: {}, nvme_address: {} }}",
+                    self.cmd,
+                    self.data_mr_address,
+                    self.data_mr_length,
+                    self.data_mr_r_key,
+                    self.lba
+                )
+            }
+
         }
     }
 
@@ -264,7 +278,7 @@ pub mod capsule {
                 .ok_or(RDMACapsuleError::InvalidIndex)
         }
 
-        pub fn get_request_capsule_content(&self, idx: usize) -> Result<(NvmeCommand, u64, u64, u32, u32), RDMACapsuleError> {
+        pub fn get_request_capsule_content(&self, idx: usize) -> Result<(NvmeCommand, u64, u64, u32, u32, bool), RDMACapsuleError> {
             #[cfg(enable_trace)]
             let span = span!(Level::INFO, "capsule.get_request_capsule_content");
             #[cfg(enable_trace)]
@@ -278,7 +292,8 @@ pub mod capsule {
                 capsule.lba.clone(),
                 capsule.data_mr_address.clone(),
                 capsule.data_mr_length.clone(),
-                capsule.data_mr_r_key.clone()
+                capsule.data_mr_r_key.clone(),
+                capsule.in_capsule_data.clone()
             ))
         }
     }

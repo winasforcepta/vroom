@@ -17,7 +17,7 @@ use core::slice::SlicePattern;
     use crate::memory::Dma;
     use crate::QUEUE_LENGTH;
 
-    pub static MAX_SGE: u32 = 1u32;
+    pub static MAX_SGE: u32 = 2u32;
     // 1024 to follow the VROOM constant
     // pub static MAX_WR: usize = QUEUE_LENGTH;
     pub const MAX_CLIENT: u16 = 16u16;
