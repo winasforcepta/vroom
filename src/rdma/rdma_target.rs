@@ -936,7 +936,7 @@ use crate::memory::DmaSlice;
 
                 #[cfg(enable_trace)]
                 let guard = span!(Level::INFO, "nvme_queue_pair.quick_poll").entered();
-                while let Some(completion) = nvme_queue_pair.quick_poll_completion() {
+                if let Some(completion) = nvme_queue_pair.quick_poll_completion() {
                     #[cfg(enable_trace)]
                     let s = span!(Level::INFO, "On NVMe Completion found");
                     #[cfg(enable_trace)]
