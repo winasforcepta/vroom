@@ -10,7 +10,7 @@ use core::slice::SlicePattern;
     use crate::rdma::rdma_common::rdma_binding;
     use std::any::Any;
     use std::net::Ipv4Addr;
-    use std::os::raw::c_int;
+    use std::os::raw::{c_int, c_void};
     use std::{fmt, io, mem, ptr};
     use std::cell::UnsafeCell;
     use tracing::span;
@@ -373,12 +373,12 @@ use core::slice::SlicePattern;
                 println!("QP is transitioned into IBV_QPS_ERR.");
             }
 
-            unsafe {
-                println!("Flushing WC.");
-                let mut dummy: Vec<rdma_binding::ibv_wc> = vec![mem::zeroed(); QUEUE_LENGTH];
-                rdma_binding::ibv_poll_cq_ex(self.cq, QUEUE_LENGTH as c_int, dummy.as_mut_ptr());
-                println!("WC is flushed");
-            }
+            // unsafe {
+            //     println!("Flushing WC.");
+            //     let mut dummy: Vec<rdma_binding::ibv_wc> = vec![mem::zeroed(); QUEUE_LENGTH];
+            //     rdma_binding::ibv_poll_cq_ex(self.cq, QUEUE_LENGTH as c_int, dummy.as_mut_ptr());
+            //     println!("WC is flushed");
+            // }
 
             // unsafe {
             //     println!("Drain & ack CQ events");
@@ -403,7 +403,14 @@ use core::slice::SlicePattern;
             }
 
             // unsafe {
-            //     println!("Dropping CQ.");
+            //     println!("Draining CQ async event.");
+            //     let verbs = (*self.cm_id).verbs;
+            //     let mut event: rdma_binding::ibv_async_event = std::mem::zeroed();
+            //     while rdma_binding::ibv_get_async_event(verbs, &mut event) == 0 {
+            //         rdma_binding::ibv_ack_async_event(&mut event);
+            //     }
+            //
+            //     println!("Destroy CQ.");
             //     let rc = rdma_binding::ibv_destroy_cq(self.cq);
             //     if rc != 0 {
             //         eprintln!("{}: ibv_destroy_cq() failed.", self._name)

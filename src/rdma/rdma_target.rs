@@ -374,22 +374,16 @@ use crate::memory::DmaSlice;
                         self.client_handlers.push((rdma_thread_handle, nvme_device_thread_handle));
                     },
                     rdma_binding::rdma_cm_event_type_RDMA_CM_EVENT_DISCONNECTED => {
-                        if (unsafe { *cm_event_ptr }).id.is_null() {
-                            err_msg = format!("{}: cm_event.id is null.", self.ctx.name);
-                            return Err(RdmaTransportError::OpFailedEx {
-                                source: io::Error::last_os_error(),
-                                message: err_msg
-                            });
-                        }
-                        let cm_id_raw = unsafe { (*cm_event_ptr).id };
-                        let address_id = Self::_get_client_address(cm_id_raw);
-                        #[cfg(any(debug_mode, debug_mode_verbose))]
-                        debug_println!("Got rdma_cm_event_type_RDMA_CM_EVENT_DISCONNECTED event from {}.", address_id);
-                        if let Some(signal) = self.client_thread_signal.get_mut(&address_id) {
-                            (*signal).store(false, Ordering::SeqCst);
-                        }
-
                         unsafe {
+                            let client_id = (*cm_event_ptr).id;
+                            let address_id = Self::_get_client_address(client_id);
+                            #[cfg(any(debug_mode, debug_mode_verbose))]
+                            debug_println!("Got rdma_cm_event_type_RDMA_CM_EVENT_DISCONNECTED event from {}.", address_id);
+                            if let Some(signal) = self.client_thread_signal.get_mut(&address_id) {
+                                (*signal).store(false, Ordering::SeqCst);
+                            }
+
+
                             let rc = rdma_binding::rdma_ack_cm_event(cm_event_ptr); // Ack the RDMA_CM_EVENT_DISCONNECTED event
                             if rc != 0 {
                                 let err_msg = format!("Failed to retrieve a cm event: {}", rc);
@@ -398,9 +392,18 @@ use crate::memory::DmaSlice;
                                     message: err_msg
                                 })
                             }
+                            if !client_id.is_null() {
+                                let rc = rdma_binding::rdma_disconnect(client_id);
+                                if rc != 0 {
+                                    return Err(RdmaTransportError::OpFailed(
+                                        "Failed to disconnect RDMA connection".parse().unwrap(),
+                                    ));
+                                }
+                            }
+                            #[cfg(any(debug_mode, debug_mode_verbose))]
+                            debug_println!("Stop signal has been sent into the thread {}", address_id);
                         }
-                        #[cfg(any(debug_mode, debug_mode_verbose))]
-                        debug_println!("Stop signal has been sent into the thread {}", address_id);
+
                         #[cfg(enable_trace)]
                         return Ok((0)); // TODO: Just for benchmark. Need to delete this
                     }

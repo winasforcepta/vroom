@@ -66,21 +66,20 @@ pub mod rdma_initiator {
                 },
                 sin_zero: unsafe { mem::zeroed() },
             };
-            let mut event_channel_box;
 
             // Prepare the connection
             // Open a channel used to report asynchronous communication event
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("initiator setup: creating event channel...");
-            unsafe {
+            let event_channel = unsafe {
                 let event_channel = rdma_binding::rdma_create_event_channel();
                 if event_channel.is_null() {
                     return Err(RdmaTransportError::OpFailed(
                         "Failed to create event channel".parse().unwrap(),
                     ));
                 }
-                event_channel_box = Box::from_raw(event_channel);
-            }
+                event_channel
+            };
             #[cfg(any(debug_mode, debug_mode_verbose))]
             debug_println!("initiator setup: event channel is created.");
 
@@ -92,7 +91,7 @@ pub mod rdma_initiator {
             let mut cm_id_ptr = ptr::null_mut();
             unsafe {
                 let rc = rdma_binding::rdma_create_id(
-                    event_channel_box.as_mut(),
+                    event_channel,
                     &mut cm_id_ptr,
                     ptr::null_mut(),
                     rdma_binding::rdma_port_space_RDMA_PS_TCP,
@@ -125,7 +124,7 @@ pub mod rdma_initiator {
 
                 #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("waiting for cm event: RDMA_CM_EVENT_ADDR_RESOLVED");
-                let rc = process_cm_event(event_channel_box.as_mut(), &mut cm_event)?;
+                let rc = process_cm_event(event_channel, &mut cm_event)?;
                 if rc != 0 {
                     return Err(RdmaTransportError::OpFailed(
                         "Failed to resolve address: receiving cm_event"
@@ -164,7 +163,7 @@ pub mod rdma_initiator {
                 }
                 #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("waiting for cm event: RDMA_CM_EVENT_ROUTE_RESOLVED");
-                let rc = process_cm_event(event_channel_box.as_mut(), &mut cm_event)?;
+                let rc = process_cm_event(event_channel, &mut cm_event)?;
                 if rc != 0 {
                     return Err(RdmaTransportError::OpFailed(
                         "Failed to resolve route: receiving cm_event"
@@ -224,7 +223,7 @@ pub mod rdma_initiator {
                 }
                 #[cfg(any(debug_mode, debug_mode_verbose))]
                 debug_println!("waiting for cm event: RDMA_CM_EVENT_ESTABLISHED");
-                let rc = process_cm_event(event_channel_box.as_mut(), &mut cm_event)?;
+                let rc = process_cm_event(event_channel, &mut cm_event)?;
                 if rc != 0 {
                     return Err(RdmaTransportError::OpFailed(
                         "Failed to connect: receiving cm_event".parse().unwrap(),
@@ -261,6 +260,48 @@ pub mod rdma_initiator {
                 ctx,
                 rwm
             })
+        }
+
+        pub fn disconnect(&mut self) -> Result<(), RdmaTransportError> {
+            unsafe {
+                #[cfg(any(debug_mode, debug_mode_verbose))]
+                debug_println!("initiator teardown: disconnecting from server");
+
+                // Gracefully disconnect the RDMA connection
+                if !self.ctx.cm_id.is_null() {
+                    let rc = rdma_binding::rdma_disconnect(self.ctx.cm_id);
+                    if rc != 0 {
+                        return Err(RdmaTransportError::OpFailed(
+                            "Failed to disconnect RDMA connection".parse().unwrap(),
+                        ));
+                    }
+                }
+
+                let mut cm_event: *mut rdma_binding::rdma_cm_event = std::ptr::null_mut();
+                let rc = process_cm_event(self.ctx.cm_id.as_ref().unwrap().channel, &mut cm_event)?;
+                if rc != 0 {
+                    return Err(RdmaTransportError::OpFailed(
+                        "Failed to receive RDMA_CM_EVENT_DISCONNECTED".parse().unwrap(),
+                    ));
+                }
+
+                let event_type = (*cm_event).event;
+                if event_type != rdma_binding::rdma_cm_event_type_RDMA_CM_EVENT_DISCONNECTED {
+                    let msg = format!(
+                        "Expected RDMA_CM_EVENT_DISCONNECTED, got {}",
+                        get_rdma_event_type_string(event_type)
+                    );
+                    return Err(RdmaTransportError::OpFailed(msg));
+                }
+
+                let rc = rdma_binding::rdma_ack_cm_event(cm_event);
+                if rc != 0 {
+                    return Err(RdmaTransportError::OpFailed(
+                        "Failed to ack disconnect event".parse().unwrap(),
+                    ));
+                }
+            }
+            Ok(())
         }
 
         #[inline(always)]
